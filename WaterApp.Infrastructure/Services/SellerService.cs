@@ -195,6 +195,8 @@ public class SellerService : ISellerService
 
         if (order.Status is OrderStatus.Delivered or OrderStatus.Cancelled)
             throw new ArgumentException($"An order that is already {order.Status} cannot be changed.");
+        if (order.Status == OrderStatus.PendingPayment)
+            throw new ArgumentException("Confirm the payment before updating this order's status.");
         if (parsedStatus == OrderStatus.Placed)
             throw new ArgumentException("Cannot move an order back to Placed.");
 
@@ -234,6 +236,10 @@ public class SellerService : ISellerService
             order.Payment.PaidAt = DateTime.UtcNow;
         }
 
+        // Confirming payment activates a pending online order into the queue.
+        if (order.Status == OrderStatus.PendingPayment)
+            order.Status = OrderStatus.Placed;
+
         await _db.SaveChangesAsync();
         return MapOrder(order);
     }
@@ -249,7 +255,7 @@ public class SellerService : ISellerService
         var activeProducts = await _db.Products.CountAsync(p => p.SellerId == seller.Id && p.IsActive);
         var lowStockProducts = await _db.Products.CountAsync(p => p.SellerId == seller.Id && p.IsActive && p.StockQty <= 5);
 
-        var totalOrders = await _db.Orders.CountAsync(o => o.SellerId == seller.Id);
+        var totalOrders = await _db.Orders.CountAsync(o => o.SellerId == seller.Id && o.Status != OrderStatus.PendingPayment);
         var pendingOrders = await _db.Orders.CountAsync(o =>
             o.SellerId == seller.Id &&
             (o.Status == OrderStatus.Placed || o.Status == OrderStatus.Confirmed || o.Status == OrderStatus.OutForDelivery));
