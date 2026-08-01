@@ -5,11 +5,17 @@ public record SellerProfileDto(
     string CompanyName,
     string Status,
     string? LogoUrl,
+    string? UpiId,
     double BaseLatitude,
     double BaseLongitude,
     List<string> ServicePincodes,
     DateTime CreatedAt
 );
+
+public record UpdatePaymentSettingsRequest(string? UpiId);
+
+// Returned to the buyer at checkout so the app can build the UPI QR.
+public record SellerPaymentInfoDto(Guid SellerId, string CompanyName, string? UpiId, bool AcceptsOnline);
 
 public record ProductUpdateRequest(string Name, string VolumeLabel, decimal Price, int StockQty, bool IsActive);
 
