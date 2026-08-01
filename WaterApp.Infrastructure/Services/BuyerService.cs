@@ -273,6 +273,18 @@ public class BuyerService : IBuyerService
         if (itemsForSeller.Count == 0)
             throw new InvalidOperationException("Your cart has no items from this seller.");
 
+        // Gate online orders: seller must accept UPI, and the buyer must supply
+        // a UPI reference/UTR. Without a payment gateway the server can't verify
+        // the payment itself, so the order is created in PendingPayment and only
+        // becomes active once the seller confirms receipt.
+        if (request.PaymentMode == PaymentMode.Online)
+        {
+            if (string.IsNullOrWhiteSpace(seller.UpiId))
+                throw new InvalidOperationException("This seller isn't accepting online payments right now.");
+            if (string.IsNullOrWhiteSpace(request.PaymentReference))
+                throw new ArgumentException("Enter the UPI reference / UTR from your payment before placing the order.");
+        }
+
         foreach (var item in itemsForSeller)
         {
             var product = item.Product!;
@@ -290,7 +302,9 @@ public class BuyerService : IBuyerService
             SellerId = seller.Id,
             AddressId = address.Id,
             PaymentMode = request.PaymentMode,
-            Status = OrderStatus.Placed,
+            // Online orders wait for the seller to confirm payment before they
+            // enter the active queue; COD is active immediately.
+            Status = request.PaymentMode == PaymentMode.Online ? OrderStatus.PendingPayment : OrderStatus.Placed,
             PaymentStatus = PaymentStatus.Pending
         };
 
