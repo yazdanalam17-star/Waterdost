@@ -31,7 +31,7 @@ public class BuyerService : IBuyerService
             .OrderBy(s => s.CompanyName)
             .ToListAsync();
 
-        return sellers.Select(s => new SellerDto(s.Id, s.CompanyName, s.Status.ToString(), s.LogoUrl)).ToList();
+        return sellers.Select(s => new SellerDto(s.Id, s.CompanyName, s.Status.ToString(), s.LogoUrl, s.UpiId)).ToList();
     }
 
     public async Task<List<ProductDto>> GetSellerProductsAsync(Guid sellerId)
@@ -323,8 +323,12 @@ public class BuyerService : IBuyerService
 
         order.Payment = new Payment
         {
-            Gateway = request.PaymentMode == PaymentMode.Online ? "Razorpay" : "COD",
+            Gateway = request.PaymentMode == PaymentMode.Online ? "UPI" : "COD",
             Amount = total,
+            // Buyer-entered UPI reference (UTR) when paying online; used for
+            // manual reconciliation. Payment stays Pending until verified —
+            // tapping "I've paid" places the order but does not confirm money.
+            TransactionId = request.PaymentMode == PaymentMode.Online ? request.PaymentReference?.Trim() : null,
             Status = PaymentStatus.Pending
         };
 
@@ -528,7 +532,8 @@ public class BuyerService : IBuyerService
                 i.Product!.Price,
                 i.Quantity,
                 i.Product!.SellerId,
-                i.Product!.Seller?.CompanyName ?? ""))
+                i.Product!.Seller?.CompanyName ?? "",
+                i.Product!.Seller?.UpiId))
             .ToList();
 
         var total = items.Sum(i => i.Price * i.Quantity);
