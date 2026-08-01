@@ -4,10 +4,12 @@ namespace WaterApp.Application.DTOs;
 
 public record AddToCartRequest(Guid ProductId, int Quantity);
 
-public record CartItemDto(Guid ProductId, string ProductName, decimal Price, int Quantity, Guid SellerId, string SellerName);
+public record CartItemDto(Guid ProductId, string ProductName, decimal Price, int Quantity, Guid SellerId, string SellerName, string? SellerUpiId);
 
 public record CartDto(Guid CartId, List<CartItemDto> Items, decimal Total);
 
-public record PlaceOrderRequest(Guid SellerId, Guid AddressId, PaymentMode PaymentMode);
+// PaymentReference is the UPI txn/UTR the buyer enters after paying via QR.
+// Optional: null for COD; for Online it's stored on the Payment for later reconciliation.
+public record PlaceOrderRequest(Guid SellerId, Guid AddressId, PaymentMode PaymentMode, string? PaymentReference);
 
 public record OrderDto(Guid Id, string Status, string PaymentMode, string PaymentStatus, decimal TotalAmount, DateTime CreatedAt);
