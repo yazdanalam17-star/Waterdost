@@ -6,6 +6,7 @@ public interface ISellerService
 {
     Task<SellerProfileDto?> GetMyProfileAsync(Guid userId);
     Task<SellerProfileDto> RegisterAsync(Guid userId, SellerRegisterRequest request);
+    Task<SellerProfileDto> UpdatePaymentSettingsAsync(Guid userId, string? upiId);
 
     Task<List<ProductDto>> GetMyProductsAsync(Guid userId);
     Task<ProductDto> CreateProductAsync(Guid userId, ProductCreateRequest request);
@@ -14,6 +15,7 @@ public interface ISellerService
 
     Task<List<SellerOrderDto>> GetMyOrdersAsync(Guid userId, string? status);
     Task<SellerOrderDto> UpdateOrderStatusAsync(Guid userId, Guid orderId, string status);
+    Task<SellerOrderDto> ConfirmPaymentAsync(Guid userId, Guid orderId);
 
     Task<SellerDashboardStatsDto> GetDashboardStatsAsync(Guid userId);
 }
