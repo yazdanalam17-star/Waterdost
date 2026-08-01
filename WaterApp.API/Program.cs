@@ -112,6 +112,17 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
+// Manual schema patch: UpiId was added to the Seller entity but no EF Core
+// migration exists for this project (schema was created via EnsureCreated(),
+// not migrations). Remove this block once proper EF Core migrations are set up.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.ExecuteSqlRawAsync("""
+        ALTER TABLE "Sellers" ADD COLUMN IF NOT EXISTS "UpiId" text;
+        """);
+}
+
 // Applies pending EF Core migrations on startup (safe no-op if already up to date).
 using (var scope = app.Services.CreateScope())
 {
