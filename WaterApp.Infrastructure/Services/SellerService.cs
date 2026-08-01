@@ -164,6 +164,7 @@ public class SellerService : ISellerService
         var query = _db.Orders
             .Include(o => o.Buyer)
             .Include(o => o.Address)
+            .Include(o => o.Payment)
             .Include(o => o.Items).ThenInclude(i => i.Product)
             .Where(o => o.SellerId == seller.Id)
             .AsQueryable();
@@ -189,6 +190,7 @@ public class SellerService : ISellerService
         var order = await _db.Orders
             .Include(o => o.Buyer)
             .Include(o => o.Address)
+            .Include(o => o.Payment)
             .Include(o => o.Items).ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(o => o.Id == orderId && o.SellerId == seller.Id)
             ?? throw new KeyNotFoundException("Order not found.");
@@ -326,6 +328,7 @@ public class SellerService : ISellerService
         o.Status.ToString(),
         o.PaymentMode.ToString(),
         o.PaymentStatus.ToString(),
+        o.Payment?.TransactionId,
         o.TotalAmount,
         o.CreatedAt,
         o.DeliveredAt,
