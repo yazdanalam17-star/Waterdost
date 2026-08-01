@@ -34,6 +34,7 @@ public record SellerOrderDto(
     string Status,
     string PaymentMode,
     string PaymentStatus,
+    string? PaymentReference,
     decimal TotalAmount,
     DateTime CreatedAt,
     DateTime? DeliveredAt,
