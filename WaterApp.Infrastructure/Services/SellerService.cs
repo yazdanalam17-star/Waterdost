@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using System.Text.RegularExpressions;
 using WaterApp.Application.DTOs;
 using WaterApp.Application.Interfaces;
 using WaterApp.Domain.Entities;
@@ -52,6 +53,31 @@ public class SellerService : ISellerService
         _db.Sellers.Add(seller);
         await _db.SaveChangesAsync();
 
+        return MapProfile(seller);
+    }
+
+    public async Task<SellerProfileDto> UpdatePaymentSettingsAsync(Guid userId, string? upiId)
+    {
+        var seller = await _db.Sellers
+            .Include(s => s.ServiceAreas)
+            .FirstOrDefaultAsync(s => s.UserId == userId)
+            ?? throw new KeyNotFoundException("Seller profile not found.");
+
+        var trimmed = upiId?.Trim();
+        if (!string.IsNullOrEmpty(trimmed))
+        {
+            // Basic VPA shape check: name@handle, no spaces. Not a payment
+            // guarantee — just prevents obviously malformed IDs.
+            if (!Regex.IsMatch(trimmed, @"^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$"))
+                throw new ArgumentException("Enter a valid UPI ID, e.g. name@bank.");
+            seller.UpiId = trimmed;
+        }
+        else
+        {
+            seller.UpiId = null; // clearing it disables online payment for this seller
+        }
+
+        await _db.SaveChangesAsync();
         return MapProfile(seller);
     }
 
@@ -184,6 +210,34 @@ public class SellerService : ISellerService
         return MapOrder(order);
     }
 
+    public async Task<SellerOrderDto> ConfirmPaymentAsync(Guid userId, Guid orderId)
+    {
+        var seller = await GetOwnedSellerAsync(userId);
+
+        var order = await _db.Orders
+            .Include(o => o.Buyer)
+            .Include(o => o.Address)
+            .Include(o => o.Payment)
+            .Include(o => o.Items).ThenInclude(i => i.Product)
+            .FirstOrDefaultAsync(o => o.Id == orderId && o.SellerId == seller.Id)
+            ?? throw new KeyNotFoundException("Order not found.");
+
+        if (order.PaymentMode != PaymentMode.Online)
+            throw new ArgumentException("Only online (UPI) payments need manual confirmation.");
+        if (order.PaymentStatus == PaymentStatus.Success)
+            throw new ArgumentException("This payment is already confirmed.");
+
+        order.PaymentStatus = PaymentStatus.Success;
+        if (order.Payment is not null)
+        {
+            order.Payment.Status = PaymentStatus.Success;
+            order.Payment.PaidAt = DateTime.UtcNow;
+        }
+
+        await _db.SaveChangesAsync();
+        return MapOrder(order);
+    }
+
     // ---- Dashboard ----
 
     public async Task<SellerDashboardStatsDto> GetDashboardStatsAsync(Guid userId)
@@ -248,6 +302,7 @@ public class SellerService : ISellerService
         seller.CompanyName,
         seller.Status.ToString(),
         seller.LogoUrl,
+        seller.UpiId,
         seller.BaseLatitude,
         seller.BaseLongitude,
         seller.ServiceAreas.Select(sa => sa.Pincode).ToList(),
