@@ -48,6 +48,24 @@ public class SellerController : ControllerBase
         }
     }
 
+    [HttpPut("payment-settings")]
+    public async Task<ActionResult<SellerProfileDto>> UpdatePaymentSettings(UpdatePaymentSettingsRequest request)
+    {
+        try
+        {
+            var profile = await _sellerService.UpdatePaymentSettingsAsync(CurrentUserId, request.UpiId);
+            return Ok(profile);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { message = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
     // ---- Products ----
 
     [HttpGet("products")]
@@ -138,6 +156,24 @@ public class SellerController : ControllerBase
         try
         {
             var order = await _sellerService.UpdateOrderStatusAsync(CurrentUserId, id, request.Status);
+            return Ok(order);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { message = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpPatch("orders/{id}/confirm-payment")]
+    public async Task<ActionResult<SellerOrderDto>> ConfirmPayment(Guid id)
+    {
+        try
+        {
+            var order = await _sellerService.ConfirmPaymentAsync(CurrentUserId, id);
             return Ok(order);
         }
         catch (KeyNotFoundException ex)
