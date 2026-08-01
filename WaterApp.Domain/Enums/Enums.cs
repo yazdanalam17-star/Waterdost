@@ -21,7 +21,8 @@ public enum OrderStatus
     Confirmed = 1,
     OutForDelivery = 2,
     Delivered = 3,
-    Cancelled = 4
+    Cancelled = 4,
+    PendingPayment = 5
 }
 
 public enum PaymentMode
