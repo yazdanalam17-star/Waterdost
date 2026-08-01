@@ -274,9 +274,9 @@ public class BuyerService : IBuyerService
             throw new InvalidOperationException("Your cart has no items from this seller.");
 
         // Gate online orders: seller must accept UPI, and the buyer must supply
-        // a UPI reference/UTR. Without a payment gateway the server can't verify
-        // the payment itself, so the order is created in PendingPayment and only
-        // becomes active once the seller confirms receipt.
+        // a UPI reference/UTR. Without a gateway the server can't verify payment,
+        // so online orders are created in PendingPayment and only become active
+        // once the seller confirms receipt.
         if (request.PaymentMode == PaymentMode.Online)
         {
             if (string.IsNullOrWhiteSpace(seller.UpiId))
@@ -302,8 +302,6 @@ public class BuyerService : IBuyerService
             SellerId = seller.Id,
             AddressId = address.Id,
             PaymentMode = request.PaymentMode,
-            // Online orders wait for the seller to confirm payment before they
-            // enter the active queue; COD is active immediately.
             Status = request.PaymentMode == PaymentMode.Online ? OrderStatus.PendingPayment : OrderStatus.Placed,
             PaymentStatus = PaymentStatus.Pending
         };
