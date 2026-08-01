@@ -42,6 +42,7 @@ public class Seller
     public string CompanyName { get; set; } = string.Empty;
     public string? LicenseDocUrl { get; set; }
     public string? LogoUrl { get; set; }
+    public string? UpiId { get; set; }
     public SellerStatus Status { get; set; } = SellerStatus.Pending;
 
     public double BaseLatitude { get; set; }
