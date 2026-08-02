@@ -257,7 +257,7 @@ public class SellerService : ISellerService
         var activeProducts = await _db.Products.CountAsync(p => p.SellerId == seller.Id && p.IsActive);
         var lowStockProducts = await _db.Products.CountAsync(p => p.SellerId == seller.Id && p.IsActive && p.StockQty <= 5);
 
-        var totalOrders = await _db.Orders.CountAsync(o => o.SellerId == seller.Id && o.Status != OrderStatus.PendingPayment);
+        var totalOrders = await _db.Orders.CountAsync(o => o.SellerId == seller.Id);
         var pendingOrders = await _db.Orders.CountAsync(o =>
             o.SellerId == seller.Id &&
             (o.Status == OrderStatus.Placed || o.Status == OrderStatus.Confirmed || o.Status == OrderStatus.OutForDelivery));
