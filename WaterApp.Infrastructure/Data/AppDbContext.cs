@@ -34,6 +34,7 @@ public class AppDbContext : DbContext
                 .WithOne(u => u.SellerProfile)
                 .HasForeignKey<Seller>(s => s.UserId);
             e.Property(s => s.Status).HasConversion<string>();
+            e.Property(s => s.Category).HasConversion<string>();
         });
 
         modelBuilder.Entity<ServiceArea>(e =>
