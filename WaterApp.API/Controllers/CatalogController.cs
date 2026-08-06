@@ -33,6 +33,19 @@ public class CatalogController : ControllerBase
         }
     }
 
+    [HttpGet("products")]
+    public async Task<ActionResult<List<ProductWithSellerDto>>> GetProductsByCategory([FromQuery] string pincode, [FromQuery] string category)
+    {
+        try
+        {
+            return Ok(await _buyerService.GetProductsByCategoryAsync(pincode, category));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
     [HttpGet("sellers/{id}/products")]
     public async Task<ActionResult<List<ProductDto>>> GetSellerProducts(Guid id)
     {
