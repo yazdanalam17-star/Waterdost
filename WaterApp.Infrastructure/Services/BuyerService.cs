@@ -282,6 +282,17 @@ public class BuyerService : IBuyerService
         if (itemsForSeller.Count == 0)
             throw new InvalidOperationException("Your cart has no items from this seller.");
 
+        // Online payment gating: seller must accept UPI, buyer must supply the
+        // UPI reference/UTR. The order is created as PendingPayment and only
+        // becomes active once the seller confirms receipt.
+        if (request.PaymentMode == PaymentMode.Online)
+        {
+            if (string.IsNullOrWhiteSpace(seller.UpiId))
+                throw new InvalidOperationException("This seller isn't accepting online payments right now.");
+            if (string.IsNullOrWhiteSpace(request.PaymentReference))
+                throw new ArgumentException("Enter the UPI reference / UTR from your payment before placing the order.");
+        }
+
         foreach (var item in itemsForSeller)
         {
             var product = item.Product!;
@@ -299,7 +310,7 @@ public class BuyerService : IBuyerService
             SellerId = seller.Id,
             AddressId = address.Id,
             PaymentMode = request.PaymentMode,
-            Status = OrderStatus.Placed,
+            Status = request.PaymentMode == PaymentMode.Online ? OrderStatus.PendingPayment : OrderStatus.Placed,
             PaymentStatus = PaymentStatus.Pending
         };
 
