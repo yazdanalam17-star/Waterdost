@@ -6,6 +6,7 @@ public interface IBuyerService
 {
     // ---- Catalog browsing (public) ----
     Task<List<SellerDto>> GetSellersInAreaAsync(string pincode, string? category = null);
+    Task<List<ProductWithSellerDto>> GetProductsByCategoryAsync(string pincode, string category);
     Task<List<ProductDto>> GetSellerProductsAsync(Guid sellerId);
 
     // ---- Addresses ----
