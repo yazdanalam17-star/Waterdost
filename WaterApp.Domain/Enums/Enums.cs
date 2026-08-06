@@ -15,14 +15,23 @@ public enum SellerStatus
     Suspended = 3
 }
 
+public enum SellerCategory
+{
+    Water = 0,
+    Milk = 1,
+    Groceries = 2,
+    Tiffin = 3,
+    Lpg = 4,
+    Other = 5
+}
+
 public enum OrderStatus
 {
     Placed = 0,
     Confirmed = 1,
     OutForDelivery = 2,
     Delivered = 3,
-    Cancelled = 4,
-    PendingPayment = 5
+    Cancelled = 4
 }
 
 public enum PaymentMode
