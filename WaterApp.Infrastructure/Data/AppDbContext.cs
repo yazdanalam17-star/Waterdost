@@ -51,6 +51,7 @@ public class AppDbContext : DbContext
                 .WithMany(s => s.Products)
                 .HasForeignKey(p => p.SellerId);
             e.Property(p => p.Price).HasColumnType("decimal(10,2)");
+            e.Property(p => p.Category).HasConversion<string>();
         });
 
         modelBuilder.Entity<Address>(e =>
