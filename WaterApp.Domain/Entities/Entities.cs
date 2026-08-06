@@ -40,6 +40,7 @@ public class Seller
     public User? User { get; set; }
 
     public string CompanyName { get; set; } = string.Empty;
+    public SellerCategory Category { get; set; } = SellerCategory.Water;
     public string? LicenseDocUrl { get; set; }
     public string? LogoUrl { get; set; }
     public string? UpiId { get; set; }
@@ -69,7 +70,7 @@ public class Product
     public Seller? Seller { get; set; }
 
     public string Name { get; set; } = string.Empty;
-    public string VolumeLabel { get; set; } = string.Empty; // e.g. "500ml", "1L", "20L Jar"
+    public string VolumeLabel { get; set; } = string.Empty; // unit/size, e.g. "1L", "500g", "1 plate", "14.2kg"
     public decimal Price { get; set; }
     public int StockQty { get; set; }
     public bool IsActive { get; set; } = true;
