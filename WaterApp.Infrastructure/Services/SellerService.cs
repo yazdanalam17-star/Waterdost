@@ -105,6 +105,7 @@ public class SellerService : ISellerService
         {
             SellerId = seller.Id,
             Name = request.Name.Trim(),
+            Category = Enum.TryParse<SellerCategory>(request.Category, ignoreCase: true, out var pcat) ? pcat : SellerCategory.Water,
             VolumeLabel = request.VolumeLabel.Trim(),
             Price = request.Price,
             StockQty = request.StockQty,
@@ -126,6 +127,8 @@ public class SellerService : ISellerService
             ?? throw new KeyNotFoundException("Product not found.");
 
         product.Name = request.Name.Trim();
+        if (Enum.TryParse<SellerCategory>(request.Category, ignoreCase: true, out var pcat))
+            product.Category = pcat;
         product.VolumeLabel = request.VolumeLabel.Trim();
         product.Price = request.Price;
         product.StockQty = request.StockQty;
@@ -319,7 +322,7 @@ public class SellerService : ISellerService
     );
 
     private static ProductDto MapProduct(Product p) => new(
-        p.Id, p.SellerId, p.Name, p.VolumeLabel, p.Price, p.StockQty, p.IsActive, p.ImageUrl
+        p.Id, p.SellerId, p.Name, p.Category.ToString(), p.VolumeLabel, p.Price, p.StockQty, p.IsActive, p.ImageUrl
     );
 
     private static SellerOrderDto MapOrder(Order o) => new(
