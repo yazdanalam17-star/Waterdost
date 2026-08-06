@@ -539,7 +539,7 @@ public class BuyerService : IBuyerService
     );
 
     private static ProductDto MapProduct(Product p) => new(
-        p.Id, p.SellerId, p.Name, p.VolumeLabel, p.Price, p.StockQty, p.IsActive, p.ImageUrl
+        p.Id, p.SellerId, p.Name, p.Category.ToString(), p.VolumeLabel, p.Price, p.StockQty, p.IsActive, p.ImageUrl
     );
 
     private static CartDto MapCart(Cart cart)
