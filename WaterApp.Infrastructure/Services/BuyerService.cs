@@ -18,20 +18,29 @@ public class BuyerService : IBuyerService
 
     // ==================== Catalog browsing ====================
 
-    public async Task<List<SellerDto>> GetSellersInAreaAsync(string pincode)
+    public async Task<List<SellerDto>> GetSellersInAreaAsync(string pincode, string? category = null)
     {
         if (string.IsNullOrWhiteSpace(pincode))
             throw new ArgumentException("Pincode is required.");
 
         var trimmedPincode = pincode.Trim();
 
-        var sellers = await _db.Sellers
+        var query = _db.Sellers
             .Where(s => s.Status == SellerStatus.Approved &&
-                        s.ServiceAreas.Any(sa => sa.Pincode == trimmedPincode))
+                        s.ServiceAreas.Any(sa => sa.Pincode == trimmedPincode));
+
+        // Optional category filter (e.g. "Groceries"); ignored if not a valid category.
+        if (!string.IsNullOrWhiteSpace(category) &&
+            Enum.TryParse<SellerCategory>(category, ignoreCase: true, out var cat))
+        {
+            query = query.Where(s => s.Category == cat);
+        }
+
+        var sellers = await query
             .OrderBy(s => s.CompanyName)
             .ToListAsync();
 
-        return sellers.Select(s => new SellerDto(s.Id, s.CompanyName, s.Status.ToString(), s.LogoUrl, s.UpiId)).ToList();
+        return sellers.Select(s => new SellerDto(s.Id, s.CompanyName, s.Category.ToString(), s.Status.ToString(), s.LogoUrl, s.UpiId)).ToList();
     }
 
     public async Task<List<ProductDto>> GetSellerProductsAsync(Guid sellerId)
@@ -273,18 +282,6 @@ public class BuyerService : IBuyerService
         if (itemsForSeller.Count == 0)
             throw new InvalidOperationException("Your cart has no items from this seller.");
 
-        // Gate online orders: seller must accept UPI, and the buyer must supply
-        // a UPI reference/UTR. Without a gateway the server can't verify payment,
-        // so online orders are created in PendingPayment and only become active
-        // once the seller confirms receipt.
-        if (request.PaymentMode == PaymentMode.Online)
-        {
-            if (string.IsNullOrWhiteSpace(seller.UpiId))
-                throw new InvalidOperationException("This seller isn't accepting online payments right now.");
-            if (string.IsNullOrWhiteSpace(request.PaymentReference))
-                throw new ArgumentException("Enter the UPI reference / UTR from your payment before placing the order.");
-        }
-
         foreach (var item in itemsForSeller)
         {
             var product = item.Product!;
@@ -302,7 +299,7 @@ public class BuyerService : IBuyerService
             SellerId = seller.Id,
             AddressId = address.Id,
             PaymentMode = request.PaymentMode,
-            Status = request.PaymentMode == PaymentMode.Online ? OrderStatus.PendingPayment : OrderStatus.Placed,
+            Status = OrderStatus.Placed,
             PaymentStatus = PaymentStatus.Pending
         };
 
