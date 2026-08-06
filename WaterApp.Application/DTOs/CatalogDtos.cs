@@ -7,3 +7,6 @@ public record SellerDto(Guid Id, string CompanyName, string Category, string Sta
 public record ProductCreateRequest(string Name, string Category, string VolumeLabel, decimal Price, int StockQty);
 
 public record ProductDto(Guid Id, Guid SellerId, string Name, string Category, string VolumeLabel, decimal Price, int StockQty, bool IsActive, string? ImageUrl);
+
+// Product plus its seller's name, for the buyer's product-first category browse.
+public record ProductWithSellerDto(Guid Id, Guid SellerId, string SellerName, string Name, string Category, string VolumeLabel, decimal Price, int StockQty, string? ImageUrl);
