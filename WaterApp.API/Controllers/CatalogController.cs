@@ -21,11 +21,11 @@ public class CatalogController : ControllerBase
     }
 
     [HttpGet("sellers")]
-    public async Task<ActionResult<List<SellerDto>>> GetSellersInArea([FromQuery] string pincode)
+    public async Task<ActionResult<List<SellerDto>>> GetSellersInArea([FromQuery] string pincode, [FromQuery] string? category = null)
     {
         try
         {
-            return Ok(await _buyerService.GetSellersInAreaAsync(pincode));
+            return Ok(await _buyerService.GetSellersInAreaAsync(pincode, category));
         }
         catch (ArgumentException ex)
         {
