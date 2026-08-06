@@ -5,7 +5,7 @@ namespace WaterApp.Application.Interfaces;
 public interface IBuyerService
 {
     // ---- Catalog browsing (public) ----
-    Task<List<SellerDto>> GetSellersInAreaAsync(string pincode);
+    Task<List<SellerDto>> GetSellersInAreaAsync(string pincode, string? category = null);
     Task<List<ProductDto>> GetSellerProductsAsync(Guid sellerId);
 
     // ---- Addresses ----
