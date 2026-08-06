@@ -70,6 +70,7 @@ public class Product
     public Seller? Seller { get; set; }
 
     public string Name { get; set; } = string.Empty;
+    public SellerCategory Category { get; set; } = SellerCategory.Water;
     public string VolumeLabel { get; set; } = string.Empty; // unit/size, e.g. "1L", "500g", "1 plate", "14.2kg"
     public decimal Price { get; set; }
     public int StockQty { get; set; }
