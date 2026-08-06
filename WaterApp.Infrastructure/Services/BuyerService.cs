@@ -59,6 +59,39 @@ public class BuyerService : IBuyerService
         return products.Select(MapProduct).ToList();
     }
 
+    // Product-first browse: all in-stock products of a category from approved
+    // sellers who deliver to this pincode, across sellers, cheapest first.
+    public async Task<List<ProductWithSellerDto>> GetProductsByCategoryAsync(string pincode, string category)
+    {
+        if (string.IsNullOrWhiteSpace(pincode))
+            throw new ArgumentException("Pincode is required.");
+        if (!Enum.TryParse<SellerCategory>(category, ignoreCase: true, out var cat))
+            throw new ArgumentException("Unknown category.");
+
+        var trimmedPincode = pincode.Trim();
+
+        var rows = await _db.Products
+            .Where(p => p.IsActive
+                        && p.StockQty > 0
+                        && p.Category == cat
+                        && p.Seller!.Status == SellerStatus.Approved
+                        && p.Seller.ServiceAreas.Any(sa => sa.Pincode == trimmedPincode))
+            .OrderBy(p => p.Price)
+            .Select(p => new ProductWithSellerDto(
+                p.Id,
+                p.SellerId,
+                p.Seller!.CompanyName,
+                p.Name,
+                p.Category.ToString(),
+                p.VolumeLabel,
+                p.Price,
+                p.StockQty,
+                p.ImageUrl))
+            .ToListAsync();
+
+        return rows;
+    }
+
     // ==================== Addresses ====================
 
     public async Task<List<AddressDto>> GetMyAddressesAsync(Guid userId)
