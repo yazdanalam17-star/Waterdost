@@ -122,6 +122,7 @@ using (var scope = app.Services.CreateScope())
     await db.Database.ExecuteSqlRawAsync("""
         ALTER TABLE "Sellers" ADD COLUMN IF NOT EXISTS "UpiId" text;
         ALTER TABLE "Sellers" ADD COLUMN IF NOT EXISTS "Category" text NOT NULL DEFAULT 'Water';
+        ALTER TABLE "Products" ADD COLUMN IF NOT EXISTS "Category" text NOT NULL DEFAULT 'Water';
         """);
 }
 
