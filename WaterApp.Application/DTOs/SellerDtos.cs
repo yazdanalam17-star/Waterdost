@@ -17,7 +17,7 @@ public record UpdatePaymentSettingsRequest(string? UpiId);
 // Returned to the buyer at checkout so the app can build the UPI QR.
 public record SellerPaymentInfoDto(Guid SellerId, string CompanyName, string? UpiId, bool AcceptsOnline);
 
-public record ProductUpdateRequest(string Name, string VolumeLabel, decimal Price, int StockQty, bool IsActive);
+public record ProductUpdateRequest(string Name, string Category, string VolumeLabel, decimal Price, int StockQty, bool IsActive);
 
 public record SellerOrderItemDto(
     Guid ProductId,
