@@ -9,6 +9,11 @@ public interface IBuyerService
     Task<List<ProductWithSellerDto>> GetProductsByCategoryAsync(string pincode, string category);
     Task<List<ProductDto>> GetSellerProductsAsync(Guid sellerId);
 
+    // Raw image bytes for /api/products/{id}/image (public — buyers browsing
+    // without an account need to see product photos too). Null means no
+    // image is stored for that product.
+    Task<(byte[] Data, string ContentType)?> GetProductImageAsync(Guid productId);
+
     // ---- Addresses ----
     Task<List<AddressDto>> GetMyAddressesAsync(Guid userId);
     Task<AddressDto> AddAddressAsync(Guid userId, AddressCreateRequest request);
@@ -25,11 +30,11 @@ public interface IBuyerService
 
     // ---- Orders ----
     Task<OrderDto> PlaceOrderAsync(Guid userId, PlaceOrderRequest request);
-    Task<List<OrderDto>> GetMyOrdersAsync(Guid userId, string? status);
+    Task<List<OrderDto>> GetMyOrdersAsync(Guid userId, string? status, int page = 1, int pageSize = 50);
     Task<BuyerOrderDetailDto> GetOrderDetailAsync(Guid userId, Guid orderId);
     Task<OrderDto> CancelOrderAsync(Guid userId, Guid orderId);
 
     // ---- Reviews ----
-    Task<List<SellerReviewDto>> GetSellerReviewsAsync(Guid sellerId);
+    Task<List<SellerReviewDto>> GetSellerReviewsAsync(Guid sellerId, int page = 1, int pageSize = 50);
     Task<SellerReviewDto> AddReviewAsync(Guid userId, Guid sellerId, CreateReviewRequest request);
 }

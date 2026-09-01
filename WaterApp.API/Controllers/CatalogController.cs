@@ -59,12 +59,26 @@ public class CatalogController : ControllerBase
         }
     }
 
+    // Public — buyers browsing without an account need to see product
+    // photos too. Sellers upload via POST /api/seller/products/{id}/image.
+    [HttpGet("products/{id}/image")]
+    public async Task<IActionResult> GetProductImage(Guid id)
+    {
+        var image = await _buyerService.GetProductImageAsync(id);
+        if (image is null)
+            return NotFound();
+
+        Response.Headers.CacheControl = "public, max-age=86400";
+        return File(image.Value.Data, image.Value.ContentType);
+    }
+
     [HttpGet("sellers/{id}/reviews")]
-    public async Task<ActionResult<List<SellerReviewDto>>> GetSellerReviews(Guid id)
+    public async Task<ActionResult<List<SellerReviewDto>>> GetSellerReviews(
+        Guid id, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
     {
         try
         {
-            return Ok(await _buyerService.GetSellerReviewsAsync(id));
+            return Ok(await _buyerService.GetSellerReviewsAsync(id, page, pageSize));
         }
         catch (KeyNotFoundException ex)
         {

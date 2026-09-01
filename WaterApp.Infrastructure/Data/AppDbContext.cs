@@ -12,6 +12,7 @@ public class AppDbContext : DbContext
     public DbSet<Seller> Sellers => Set<Seller>();
     public DbSet<ServiceArea> ServiceAreas => Set<ServiceArea>();
     public DbSet<Product> Products => Set<Product>();
+    public DbSet<ProductImage> ProductImages => Set<ProductImage>();
     public DbSet<Cart> Carts => Set<Cart>();
     public DbSet<CartItem> CartItems => Set<CartItem>();
     public DbSet<Order> Orders => Set<Order>();
@@ -19,6 +20,9 @@ public class AppDbContext : DbContext
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Review> Reviews => Set<Review>();
     public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<PushToken> PushTokens => Set<PushToken>();
+    public DbSet<PasswordResetOtp> PasswordResetOtps => Set<PasswordResetOtp>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -52,6 +56,15 @@ public class AppDbContext : DbContext
                 .HasForeignKey(p => p.SellerId);
             e.Property(p => p.Price).HasColumnType("decimal(10,2)");
             e.Property(p => p.Category).HasConversion<string>();
+        });
+
+        modelBuilder.Entity<ProductImage>(e =>
+        {
+            e.HasKey(pi => pi.ProductId);
+            e.HasOne(pi => pi.Product)
+                .WithOne()
+                .HasForeignKey<ProductImage>(pi => pi.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Address>(e =>
@@ -108,6 +121,32 @@ public class AppDbContext : DbContext
         {
             e.HasOne(r => r.Seller).WithMany().HasForeignKey(r => r.SellerId);
             e.HasOne(r => r.Buyer).WithMany().HasForeignKey(r => r.BuyerId);
+        });
+
+        modelBuilder.Entity<Notification>(e =>
+        {
+            e.HasOne(n => n.User).WithMany().HasForeignKey(n => n.UserId);
+            e.HasIndex(n => new { n.UserId, n.CreatedAt });
+        });
+
+        modelBuilder.Entity<PushToken>(e =>
+        {
+            e.HasOne(t => t.User).WithMany().HasForeignKey(t => t.UserId);
+            // A token identifies one device; re-registering it (new login,
+            // reinstall) should move it to the new owner, not duplicate it.
+            e.HasIndex(t => t.Token).IsUnique();
+        });
+
+        modelBuilder.Entity<PasswordResetOtp>(e =>
+        {
+            e.HasOne(o => o.User).WithMany().HasForeignKey(o => o.UserId);
+            e.HasIndex(o => new { o.UserId, o.CreatedAt });
+        });
+
+        modelBuilder.Entity<RefreshToken>(e =>
+        {
+            e.HasOne(t => t.User).WithMany().HasForeignKey(t => t.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(t => t.TokenHash).IsUnique();
         });
     }
 }

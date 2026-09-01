@@ -75,8 +75,30 @@ public class Product
     public decimal Price { get; set; }
     public int StockQty { get; set; }
     public bool IsActive { get; set; } = true;
+
+    // Fallback for a manually pasted external image link (no UI sets this
+    // today). The normal path is an uploaded photo — see ProductImage,
+    // which is deliberately a separate table/entity rather than columns
+    // here: Product rows get loaded constantly (carts, orders, listings)
+    // via plain .Include(), and EF Core loads every scalar column on an
+    // entity by default. Keeping image bytes in their own table means
+    // those everyday queries never drag a multi-hundred-KB blob along for
+    // the ride — only the one endpoint that actually serves the image asks
+    // for it.
     public string? ImageUrl { get; set; }
 
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+// One row per product that has an uploaded photo. ProductId is both the
+// primary key and the FK — a product has at most one stored image.
+public class ProductImage
+{
+    public Guid ProductId { get; set; }
+    public Product? Product { get; set; }
+
+    public byte[] Data { get; set; } = Array.Empty<byte>();
+    public string ContentType { get; set; } = "image/jpeg";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
@@ -174,4 +196,57 @@ public class Notification
     public string Body { get; set; } = string.Empty;
     public bool IsRead { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+// A device's Expo push token, registered by the app after the user grants
+// notification permission and signs in. One token maps to at most one
+// user at a time (see the unique index in AppDbContext) — if a different
+// account later signs in on the same device, re-registering the token
+// reassigns it rather than notifying both accounts.
+public class PushToken
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid UserId { get; set; }
+    public User? User { get; set; }
+
+    public string Token { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+// A one-time SMS verification code for the "forgot password" flow. Only
+// the most recent row per user is ever valid — ForgotPasswordAsync clears
+// any earlier ones when it issues a new code.
+public class PasswordResetOtp
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid UserId { get; set; }
+    public User? User { get; set; }
+
+    public string CodeHash { get; set; } = string.Empty;
+    public int Attempts { get; set; }
+    public DateTime ExpiresAt { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+// Server-side record of an issued refresh token, so it can actually be
+// validated, rotated, and revoked — previously GenerateRefreshToken()'s
+// output was handed to the client and never checked again by anything,
+// meaning the only way to end a session was the 60-minute access token
+// expiring (forcing a full re-login every hour with no way back in
+// between). Only TokenHash (SHA-256 of the raw token) is stored, never the
+// raw token itself, the same principle as password hashing.
+public class RefreshToken
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid UserId { get; set; }
+    public User? User { get; set; }
+
+    public string TokenHash { get; set; } = string.Empty;
+    public DateTime ExpiresAt { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    // Set the moment this token is used (rotation) or the user logs out.
+    // A revoked-but-not-yet-expired row is kept, not deleted, so reuse of
+    // an already-rotated token is still detectable rather than looking
+    // like "token not found".
+    public DateTime? RevokedAt { get; set; }
 }

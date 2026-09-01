@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using WaterApp.Application.DTOs;
 using WaterApp.Application.Interfaces;
 using WaterApp.Domain.Entities;
@@ -10,10 +11,14 @@ namespace WaterApp.Infrastructure.Services;
 public class BuyerService : IBuyerService
 {
     private readonly AppDbContext _db;
+    private readonly INotificationService _notifications;
+    private readonly IConfiguration _config;
 
-    public BuyerService(AppDbContext db)
+    public BuyerService(AppDbContext db, INotificationService notifications, IConfiguration config)
     {
         _db = db;
+        _notifications = notifications;
+        _config = config;
     }
 
     // ==================== Catalog browsing ====================
@@ -56,7 +61,14 @@ public class BuyerService : IBuyerService
             .OrderBy(p => p.Name)
             .ToListAsync();
 
-        return products.Select(MapProduct).ToList();
+        var productIds = products.Select(p => p.Id).ToList();
+        var withImage = (await _db.ProductImages
+            .Where(pi => productIds.Contains(pi.ProductId))
+            .Select(pi => pi.ProductId)
+            .ToListAsync())
+            .ToHashSet();
+
+        return products.Select(p => MapProduct(p, withImage.Contains(p.Id))).ToList();
     }
 
     // Product-first browse: all in-stock products of a category from approved
@@ -77,19 +89,29 @@ public class BuyerService : IBuyerService
                         && p.Seller!.Status == SellerStatus.Approved
                         && p.Seller.ServiceAreas.Any(sa => sa.Pincode == trimmedPincode))
             .OrderBy(p => p.Price)
-            .Select(p => new ProductWithSellerDto(
+            .Select(p => new
+            {
                 p.Id,
                 p.SellerId,
-                p.Seller!.CompanyName,
+                SellerName = p.Seller!.CompanyName,
                 p.Name,
-                p.Category.ToString(),
+                Category = p.Category.ToString(),
                 p.VolumeLabel,
                 p.Price,
                 p.StockQty,
-                p.ImageUrl))
+                p.ImageUrl,
+                // A plain existence check (translates to a SQL EXISTS/JOIN),
+                // never the image bytes themselves.
+                HasImage = _db.ProductImages.Any(pi => pi.ProductId == p.Id)
+            })
             .ToListAsync();
 
-        return rows;
+        var baseUrl = _config["App:PublicBaseUrl"]?.TrimEnd('/') ?? "";
+
+        return rows.Select(r => new ProductWithSellerDto(
+            r.Id, r.SellerId, r.SellerName, r.Name, r.Category, r.VolumeLabel, r.Price, r.StockQty,
+            r.HasImage ? $"{baseUrl}/api/products/{r.Id}/image" : r.ImageUrl
+        )).ToList();
     }
 
     // ==================== Addresses ====================
@@ -391,11 +413,22 @@ public class BuyerService : IBuyerService
         await _db.SaveChangesAsync();
         await transaction.CommitAsync();
 
+        // Best-effort — NotifyUserAsync never throws, so this can't turn a
+        // successful order into a failed request.
+        await _notifications.NotifyUserAsync(
+            seller.UserId,
+            "New order",
+            $"You've received a new order for ₹{total:F2}."
+        );
+
         return MapOrder(order);
     }
 
-    public async Task<List<OrderDto>> GetMyOrdersAsync(Guid userId, string? status)
+    public async Task<List<OrderDto>> GetMyOrdersAsync(Guid userId, string? status, int page = 1, int pageSize = 50)
     {
+        page = page < 1 ? 1 : page;
+        pageSize = pageSize is < 1 or > 100 ? 50 : pageSize;
+
         var query = _db.Orders.Where(o => o.BuyerId == userId).AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(status))
@@ -405,7 +438,11 @@ public class BuyerService : IBuyerService
             query = query.Where(o => o.Status == parsedStatus);
         }
 
-        var orders = await query.OrderByDescending(o => o.CreatedAt).ToListAsync();
+        var orders = await query
+            .OrderByDescending(o => o.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
         return orders.Select(MapOrder).ToList();
     }
 
@@ -442,6 +479,7 @@ public class BuyerService : IBuyerService
     public async Task<OrderDto> CancelOrderAsync(Guid userId, Guid orderId)
     {
         var order = await _db.Orders
+            .Include(o => o.Seller)
             .Include(o => o.Items).ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(o => o.Id == orderId && o.BuyerId == userId)
             ?? throw new KeyNotFoundException("Order not found.");
@@ -464,13 +502,26 @@ public class BuyerService : IBuyerService
             order.PaymentStatus = PaymentStatus.Refunded;
 
         await _db.SaveChangesAsync();
+
+        if (order.Seller is not null)
+        {
+            await _notifications.NotifyUserAsync(
+                order.Seller.UserId,
+                "Order cancelled",
+                $"An order for ₹{order.TotalAmount:F2} was cancelled by the buyer."
+            );
+        }
+
         return MapOrder(order);
     }
 
     // ==================== Reviews ====================
 
-    public async Task<List<SellerReviewDto>> GetSellerReviewsAsync(Guid sellerId)
+    public async Task<List<SellerReviewDto>> GetSellerReviewsAsync(Guid sellerId, int page = 1, int pageSize = 50)
     {
+        page = page < 1 ? 1 : page;
+        pageSize = pageSize is < 1 or > 100 ? 50 : pageSize;
+
         var sellerExists = await _db.Sellers.AnyAsync(s => s.Id == sellerId);
         if (!sellerExists)
             throw new KeyNotFoundException("Seller not found.");
@@ -479,6 +530,8 @@ public class BuyerService : IBuyerService
             .Include(r => r.Buyer)
             .Where(r => r.SellerId == sellerId)
             .OrderByDescending(r => r.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .ToListAsync();
 
         return reviews.Select(r => new SellerReviewDto(r.Id, r.Buyer?.Name ?? "Anonymous", r.Rating, r.Comment, r.CreatedAt)).ToList();
@@ -571,9 +624,22 @@ public class BuyerService : IBuyerService
         a.Id, a.Line1, a.Line2, a.City, a.State, a.Pincode, a.Latitude, a.Longitude, a.IsDefault
     );
 
-    private static ProductDto MapProduct(Product p) => new(
-        p.Id, p.SellerId, p.Name, p.Category.ToString(), p.VolumeLabel, p.Price, p.StockQty, p.IsActive, p.ImageUrl
+    private ProductDto MapProduct(Product p, bool hasImage) => new(
+        p.Id, p.SellerId, p.Name, p.Category.ToString(), p.VolumeLabel, p.Price, p.StockQty, p.IsActive,
+        hasImage ? $"{(_config["App:PublicBaseUrl"]?.TrimEnd('/') ?? "")}/api/products/{p.Id}/image" : p.ImageUrl
     );
+
+    // Raw bytes for the public /api/products/{id}/image endpoint. Only
+    // this call ever actually reads image data out of the database.
+    public async Task<(byte[] Data, string ContentType)?> GetProductImageAsync(Guid productId)
+    {
+        var image = await _db.ProductImages
+            .Where(pi => pi.ProductId == productId)
+            .Select(pi => new { pi.Data, pi.ContentType })
+            .FirstOrDefaultAsync();
+
+        return image is null ? null : (image.Data, image.ContentType);
+    }
 
     private static CartDto MapCart(Cart cart)
     {

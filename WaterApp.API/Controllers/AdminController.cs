@@ -25,11 +25,12 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("sellers")]
-    public async Task<ActionResult<List<AdminSellerResponse>>> GetSellers([FromQuery] string? status)
+    public async Task<ActionResult<List<AdminSellerResponse>>> GetSellers(
+        [FromQuery] string? status, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
     {
         try
         {
-            var sellers = await _adminService.GetSellersAsync(status);
+            var sellers = await _adminService.GetSellersAsync(status, page, pageSize);
             return Ok(sellers);
         }
         catch (ArgumentException ex)
@@ -57,9 +58,10 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("buyers")]
-    public async Task<ActionResult<List<AdminBuyerResponse>>> GetBuyers([FromQuery] string? search)
+    public async Task<ActionResult<List<AdminBuyerResponse>>> GetBuyers(
+        [FromQuery] string? search, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
     {
-        var buyers = await _adminService.GetBuyersAsync(search);
+        var buyers = await _adminService.GetBuyersAsync(search, page, pageSize);
         return Ok(buyers);
     }
 

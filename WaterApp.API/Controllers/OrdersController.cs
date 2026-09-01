@@ -43,11 +43,12 @@ public class OrdersController : ControllerBase
     }
 
     [HttpGet("me")]
-    public async Task<ActionResult<List<OrderDto>>> GetMyOrders([FromQuery] string? status)
+    public async Task<ActionResult<List<OrderDto>>> GetMyOrders(
+        [FromQuery] string? status, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
     {
         try
         {
-            return Ok(await _buyerService.GetMyOrdersAsync(CurrentUserId, status));
+            return Ok(await _buyerService.GetMyOrdersAsync(CurrentUserId, status, page, pageSize));
         }
         catch (ArgumentException ex)
         {

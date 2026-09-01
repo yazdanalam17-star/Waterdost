@@ -9,10 +9,12 @@ namespace WaterApp.Infrastructure.Services;
 public class AdminService : IAdminService
 {
     private readonly AppDbContext _db;
+    private readonly INotificationService _notifications;
 
-    public AdminService(AppDbContext db)
+    public AdminService(AppDbContext db, INotificationService notifications)
     {
         _db = db;
+        _notifications = notifications;
     }
 
     public async Task<AdminStatsResponse> GetStatsAsync()
@@ -42,8 +44,11 @@ public class AdminService : IAdminService
         );
     }
 
-    public async Task<List<AdminSellerResponse>> GetSellersAsync(string? status)
+    public async Task<List<AdminSellerResponse>> GetSellersAsync(string? status, int page = 1, int pageSize = 50)
     {
+        page = page < 1 ? 1 : page;
+        pageSize = pageSize is < 1 or > 100 ? 50 : pageSize;
+
         var query = _db.Sellers.Include(s => s.User).AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(status))
@@ -53,7 +58,11 @@ public class AdminService : IAdminService
             query = query.Where(s => s.Status == parsedStatus);
         }
 
-        var sellers = await query.OrderByDescending(s => s.CreatedAt).ToListAsync();
+        var sellers = await query
+            .OrderByDescending(s => s.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
 
         return sellers.Select(s => new AdminSellerResponse(
             s.Id,
@@ -78,6 +87,17 @@ public class AdminService : IAdminService
         seller.Status = parsedStatus;
         await _db.SaveChangesAsync();
 
+        if (parsedStatus is SellerStatus.Approved or SellerStatus.Rejected)
+        {
+            await _notifications.NotifyUserAsync(
+                seller.UserId,
+                parsedStatus == SellerStatus.Approved ? "Seller application approved" : "Seller application update",
+                parsedStatus == SellerStatus.Approved
+                    ? "Your store is approved and now visible to buyers."
+                    : "Your seller application was not approved. Contact support for details."
+            );
+        }
+
         return new AdminSellerResponse(
             seller.Id,
             seller.UserId,
@@ -90,8 +110,11 @@ public class AdminService : IAdminService
         );
     }
 
-    public async Task<List<AdminBuyerResponse>> GetBuyersAsync(string? search)
+    public async Task<List<AdminBuyerResponse>> GetBuyersAsync(string? search, int page = 1, int pageSize = 50)
     {
+        page = page < 1 ? 1 : page;
+        pageSize = pageSize is < 1 or > 100 ? 50 : pageSize;
+
         var query = _db.Users.Where(u => u.Role == UserRole.Buyer);
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -103,6 +126,8 @@ public class AdminService : IAdminService
         // Project order counts in a single query rather than N per-user lookups.
         var buyers = await query
             .OrderByDescending(u => u.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(u => new AdminBuyerResponse(
                 u.Id,
                 u.Name,

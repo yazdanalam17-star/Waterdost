@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace WaterApp.Application.DTOs;
 
 public record AdminStatsResponse(
@@ -22,7 +24,7 @@ public record AdminSellerResponse(
     DateTime CreatedAt
 );
 
-public record UpdateSellerStatusRequest(string Status);
+public record UpdateSellerStatusRequest([Required] string Status);
 
 public record AdminBuyerResponse(
     Guid Id,

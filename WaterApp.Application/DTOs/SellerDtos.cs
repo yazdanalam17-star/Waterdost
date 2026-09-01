@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace WaterApp.Application.DTOs;
 
 public record SellerProfileDto(
@@ -12,12 +14,24 @@ public record SellerProfileDto(
     DateTime CreatedAt
 );
 
+// UpiId is deliberately NOT annotated with a format attribute here —
+// SellerService.UpdatePaymentSettingsAsync already validates the VPA shape
+// with its own regex and error message. Duplicating that check here with a
+// second, slightly different pattern would risk the two disagreeing on
+// what's valid.
 public record UpdatePaymentSettingsRequest(string? UpiId);
 
 // Returned to the buyer at checkout so the app can build the UPI QR.
 public record SellerPaymentInfoDto(Guid SellerId, string CompanyName, string? UpiId, bool AcceptsOnline);
 
-public record ProductUpdateRequest(string Name, string Category, string VolumeLabel, decimal Price, int StockQty, bool IsActive);
+public record ProductUpdateRequest(
+    [Required, StringLength(100, MinimumLength = 1)] string Name,
+    [Required] string Category,
+    [Required, StringLength(50, MinimumLength = 1)] string VolumeLabel,
+    [Range(typeof(decimal), "0.01", "100000")] decimal Price,
+    [Range(0, 100000)] int StockQty,
+    bool IsActive
+);
 
 public record SellerOrderItemDto(
     Guid ProductId,
@@ -42,7 +56,7 @@ public record SellerOrderDto(
     List<SellerOrderItemDto> Items
 );
 
-public record UpdateOrderStatusRequest(string Status);
+public record UpdateOrderStatusRequest([Required] string Status);
 
 public record SellerDashboardStatsDto(
     int TotalProducts,

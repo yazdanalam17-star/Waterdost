@@ -1,5 +1,8 @@
 using System.Text;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using WaterApp.Application.Interfaces;
@@ -40,12 +43,35 @@ static string? ConvertToNpgsqlConnectionString(string? raw)
 }
 
 // ---- DI ----
+builder.Services.AddMemoryCache();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IPasswordHasher, BcryptPasswordHasher>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 builder.Services.AddScoped<ISellerService, SellerService>();
 builder.Services.AddScoped<IBuyerService, BuyerService>();
+builder.Services.AddScoped<IAccountService, AccountService>();
+// Typed HttpClient: this alone registers NotificationService for
+// INotificationService (as well as wiring up the HttpClient it takes in
+// its constructor) — no separate AddScoped needed.
+builder.Services.AddHttpClient<INotificationService, NotificationService>();
+
+// SMS sender for the forgot-password OTP flow. Only wired to a real
+// provider (Twilio) when it's actually configured; otherwise falls back to
+// logging the code, so local/dev environments never need real credentials
+// and a missing config doesn't 500 the forgot-password endpoint.
+var smsConfigured = !string.IsNullOrEmpty(builder.Configuration["Sms:AccountSid"])
+    && !string.IsNullOrEmpty(builder.Configuration["Sms:AuthToken"])
+    && !string.IsNullOrEmpty(builder.Configuration["Sms:FromNumber"]);
+
+if (smsConfigured)
+{
+    builder.Services.AddHttpClient<ISmsSender, TwilioSmsSender>();
+}
+else
+{
+    builder.Services.AddScoped<ISmsSender, LoggingSmsSender>();
+}
 
 // ---- JWT Auth ----
 var jwtSecret = builder.Configuration["Jwt:Secret"]
@@ -93,6 +119,66 @@ builder.Services.AddCors(options =>
             .AllowAnyHeader());
 });
 
+// Railway (like most PaaS hosts) terminates TLS at its own edge and
+// forwards requests to this app over plain HTTP with X-Forwarded-* headers
+// describing the real client. Without this, HttpContext.Connection
+// .RemoteIpAddress is just Railway's internal proxy IP for every request —
+// which would make the rate limiter below key everything off one shared
+// address instead of the actual caller.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // Railway's edge isn't a fixed, listable proxy IP, so trust the
+    // forwarded header unconditionally rather than restricting to a known
+    // proxy allowlist — the standard approach for platforms like this
+    // (Railway/Render/Heroku) where the app is only ever reached through
+    // the platform's own edge, never directly.
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
+// ---- Rate limiting ----
+// A generous global baseline on every request (mainly a backstop against
+// runaway retry loops or scraping — not meant to affect normal use), plus
+// a much stricter "auth" policy layered on top of it for the endpoints
+// that matter most for brute-force/credential-stuffing/spam: see
+// [EnableRateLimiting("auth")] on AuthController. Both policies are
+// evaluated together for auth requests; a request must pass both.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsync(
+            """{"message":"Too many requests. Please wait a moment and try again."}""",
+            cancellationToken);
+    };
+
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: GetClientIp(httpContext),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 200,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+
+    options.AddPolicy("auth", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: GetClientIp(httpContext),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+});
+
+static string GetClientIp(HttpContext context) =>
+    context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
 var app = builder.Build();
 
 // Swagger is normally dev-only. Set ENABLE_SWAGGER=true in Railway to turn it on
@@ -107,7 +193,9 @@ if (swaggerEnabled)
     app.UseSwaggerUI();
 }
 
+app.UseForwardedHeaders();
 app.UseCors("AllowAll");
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
@@ -123,6 +211,39 @@ using (var scope = app.Services.CreateScope())
         ALTER TABLE "Sellers" ADD COLUMN IF NOT EXISTS "UpiId" text;
         ALTER TABLE "Sellers" ADD COLUMN IF NOT EXISTS "Category" text NOT NULL DEFAULT 'Water';
         ALTER TABLE "Products" ADD COLUMN IF NOT EXISTS "Category" text NOT NULL DEFAULT 'Water';
+        CREATE TABLE IF NOT EXISTS "PushTokens" (
+            "Id" uuid NOT NULL PRIMARY KEY,
+            "UserId" uuid NOT NULL REFERENCES "Users"("Id") ON DELETE CASCADE,
+            "Token" text NOT NULL,
+            "CreatedAt" timestamp with time zone NOT NULL DEFAULT now()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "IX_PushTokens_Token" ON "PushTokens" ("Token");
+        CREATE INDEX IF NOT EXISTS "IX_PushTokens_UserId" ON "PushTokens" ("UserId");
+        CREATE TABLE IF NOT EXISTS "PasswordResetOtps" (
+            "Id" uuid NOT NULL PRIMARY KEY,
+            "UserId" uuid NOT NULL REFERENCES "Users"("Id") ON DELETE CASCADE,
+            "CodeHash" text NOT NULL,
+            "Attempts" integer NOT NULL DEFAULT 0,
+            "ExpiresAt" timestamp with time zone NOT NULL,
+            "CreatedAt" timestamp with time zone NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "IX_PasswordResetOtps_UserId_CreatedAt" ON "PasswordResetOtps" ("UserId", "CreatedAt");
+        CREATE TABLE IF NOT EXISTS "ProductImages" (
+            "ProductId" uuid NOT NULL PRIMARY KEY REFERENCES "Products"("Id") ON DELETE CASCADE,
+            "Data" bytea NOT NULL,
+            "ContentType" text NOT NULL,
+            "CreatedAt" timestamp with time zone NOT NULL DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS "RefreshTokens" (
+            "Id" uuid NOT NULL PRIMARY KEY,
+            "UserId" uuid NOT NULL REFERENCES "Users"("Id") ON DELETE CASCADE,
+            "TokenHash" text NOT NULL,
+            "ExpiresAt" timestamp with time zone NOT NULL,
+            "CreatedAt" timestamp with time zone NOT NULL DEFAULT now(),
+            "RevokedAt" timestamp with time zone
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "IX_RefreshTokens_TokenHash" ON "RefreshTokens" ("TokenHash");
+        CREATE INDEX IF NOT EXISTS "IX_RefreshTokens_UserId" ON "RefreshTokens" ("UserId");
         """);
 }
 

@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace WaterApp.Application.DTOs;
 
 // ---- Addresses ----
@@ -15,22 +17,22 @@ public record AddressDto(
 );
 
 public record AddressCreateRequest(
-    string Line1,
-    string? Line2,
-    string City,
-    string State,
-    string Pincode,
+    [Required, StringLength(200, MinimumLength = 1)] string Line1,
+    [StringLength(200)] string? Line2,
+    [Required, StringLength(100, MinimumLength = 1)] string City,
+    [Required, StringLength(100, MinimumLength = 1)] string State,
+    [Required, StringLength(10, MinimumLength = 4)] string Pincode,
     double? Latitude,
     double? Longitude,
     bool IsDefault
 );
 
 public record AddressUpdateRequest(
-    string Line1,
-    string? Line2,
-    string City,
-    string State,
-    string Pincode,
+    [Required, StringLength(200, MinimumLength = 1)] string Line1,
+    [StringLength(200)] string? Line2,
+    [Required, StringLength(100, MinimumLength = 1)] string City,
+    [Required, StringLength(100, MinimumLength = 1)] string State,
+    [Required, StringLength(10, MinimumLength = 4)] string Pincode,
     double? Latitude,
     double? Longitude,
     bool IsDefault
@@ -70,8 +72,14 @@ public record SellerReviewDto(
     DateTime CreatedAt
 );
 
-public record CreateReviewRequest(int Rating, string? Comment);
+public record CreateReviewRequest(
+    [Range(1, 5, ErrorMessage = "Rating must be between 1 and 5.")] int Rating,
+    [StringLength(1000)] string? Comment
+);
 
 // ---- Cart ----
 
-public record UpdateCartItemRequest(int Quantity);
+// 0 is a valid, intentional value here — it means "remove this item from
+// the cart" (see BuyerService.UpdateCartItemAsync). Only negative values
+// and unreasonably large ones are actually invalid.
+public record UpdateCartItemRequest([Range(0, 999)] int Quantity);

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using System.Text.RegularExpressions;
 using WaterApp.Application.DTOs;
 using WaterApp.Application.Interfaces;
@@ -10,11 +11,19 @@ namespace WaterApp.Infrastructure.Services;
 
 public class SellerService : ISellerService
 {
-    private readonly AppDbContext _db;
+    private const long MaxImageBytes = 5 * 1024 * 1024; // 5 MB
+    private static readonly HashSet<string> AllowedImageContentTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "image/jpeg", "image/png", "image/webp" };
 
-    public SellerService(AppDbContext db)
+    private readonly AppDbContext _db;
+    private readonly INotificationService _notifications;
+    private readonly IConfiguration _config;
+
+    public SellerService(AppDbContext db, INotificationService notifications, IConfiguration config)
     {
         _db = db;
+        _notifications = notifications;
+        _config = config;
     }
 
     // ---- Profile / registration ----
@@ -93,7 +102,16 @@ public class SellerService : ISellerService
             .OrderByDescending(p => p.CreatedAt)
             .ToListAsync();
 
-        return products.Select(MapProduct).ToList();
+        // A lightweight existence check (product IDs only, never the image
+        // bytes) so listing a whole catalog doesn't drag every photo along.
+        var productIds = products.Select(p => p.Id).ToList();
+        var withImage = (await _db.ProductImages
+            .Where(pi => productIds.Contains(pi.ProductId))
+            .Select(pi => pi.ProductId)
+            .ToListAsync())
+            .ToHashSet();
+
+        return products.Select(p => MapProduct(p, withImage.Contains(p.Id))).ToList();
     }
 
     public async Task<ProductDto> CreateProductAsync(Guid userId, ProductCreateRequest request)
@@ -115,7 +133,7 @@ public class SellerService : ISellerService
         _db.Products.Add(product);
         await _db.SaveChangesAsync();
 
-        return MapProduct(product);
+        return MapProduct(product, hasImage: false);
     }
 
     public async Task<ProductDto> UpdateProductAsync(Guid userId, Guid productId, ProductUpdateRequest request)
@@ -135,7 +153,9 @@ public class SellerService : ISellerService
         product.IsActive = request.IsActive;
 
         await _db.SaveChangesAsync();
-        return MapProduct(product);
+
+        var hasImage = await _db.ProductImages.AnyAsync(pi => pi.ProductId == product.Id);
+        return MapProduct(product, hasImage);
     }
 
     public async Task DeleteProductAsync(Guid userId, Guid productId)
@@ -159,10 +179,69 @@ public class SellerService : ISellerService
         await _db.SaveChangesAsync();
     }
 
+    // ---- Product image ----
+
+    public async Task<ProductDto> SetProductImageAsync(Guid userId, Guid productId, Stream? imageStream, string? contentType, long length)
+    {
+        var seller = await GetOwnedSellerAsync(userId);
+        var product = await _db.Products.FirstOrDefaultAsync(p => p.Id == productId && p.SellerId == seller.Id)
+            ?? throw new KeyNotFoundException("Product not found.");
+
+        if (imageStream is null || length == 0)
+            throw new ArgumentException("No image file was provided.");
+        if (length > MaxImageBytes)
+            throw new ArgumentException("Image must be smaller than 5 MB.");
+        if (contentType is null || !AllowedImageContentTypes.Contains(contentType))
+            throw new ArgumentException("Image must be a JPEG, PNG, or WEBP file.");
+
+        using var buffer = new MemoryStream();
+        await imageStream.CopyToAsync(buffer);
+        var bytes = buffer.ToArray();
+
+        var existing = await _db.ProductImages.FirstOrDefaultAsync(pi => pi.ProductId == productId);
+        if (existing is not null)
+        {
+            existing.Data = bytes;
+            existing.ContentType = contentType;
+            existing.CreatedAt = DateTime.UtcNow;
+        }
+        else
+        {
+            _db.ProductImages.Add(new ProductImage
+            {
+                ProductId = productId,
+                Data = bytes,
+                ContentType = contentType
+            });
+        }
+
+        await _db.SaveChangesAsync();
+        return MapProduct(product, hasImage: true);
+    }
+
+    public async Task<ProductDto> RemoveProductImageAsync(Guid userId, Guid productId)
+    {
+        var seller = await GetOwnedSellerAsync(userId);
+        var product = await _db.Products.FirstOrDefaultAsync(p => p.Id == productId && p.SellerId == seller.Id)
+            ?? throw new KeyNotFoundException("Product not found.");
+
+        var existing = await _db.ProductImages.FirstOrDefaultAsync(pi => pi.ProductId == productId);
+        if (existing is not null)
+            _db.ProductImages.Remove(existing);
+
+        product.ImageUrl = null;
+
+        await _db.SaveChangesAsync();
+        return MapProduct(product, hasImage: false);
+    }
+
     // ---- Orders ----
 
-    public async Task<List<SellerOrderDto>> GetMyOrdersAsync(Guid userId, string? status)
+    public async Task<List<SellerOrderDto>> GetMyOrdersAsync(Guid userId, string? status, int page = 1, int pageSize = 50)
     {
+        page = page < 1 ? 1 : page;
+        pageSize = pageSize is < 1 or > 100 ? 50 : pageSize;
+
         var seller = await GetOwnedSellerAsync(userId);
 
         var query = _db.Orders
@@ -180,7 +259,11 @@ public class SellerService : ISellerService
             query = query.Where(o => o.Status == parsedStatus);
         }
 
-        var orders = await query.OrderByDescending(o => o.CreatedAt).ToListAsync();
+        var orders = await query
+            .OrderByDescending(o => o.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
         return orders.Select(MapOrder).ToList();
     }
 
@@ -215,6 +298,13 @@ public class SellerService : ISellerService
         }
 
         await _db.SaveChangesAsync();
+
+        await _notifications.NotifyUserAsync(
+            order.BuyerId,
+            "Order update",
+            StatusChangeMessage(parsedStatus)
+        );
+
         return MapOrder(order);
     }
 
@@ -243,10 +333,20 @@ public class SellerService : ISellerService
         }
 
         // Confirming payment activates a pending online order into the queue.
-        if (order.Status == OrderStatus.PendingPayment)
+        var wasPendingPayment = order.Status == OrderStatus.PendingPayment;
+        if (wasPendingPayment)
             order.Status = OrderStatus.Placed;
 
         await _db.SaveChangesAsync();
+
+        await _notifications.NotifyUserAsync(
+            order.BuyerId,
+            "Payment confirmed",
+            wasPendingPayment
+                ? $"Your payment of ₹{order.TotalAmount:F2} was confirmed and your order is now placed."
+                : $"Your payment of ₹{order.TotalAmount:F2} was confirmed."
+        );
+
         return MapOrder(order);
     }
 
@@ -297,6 +397,14 @@ public class SellerService : ISellerService
             ?? throw new KeyNotFoundException("Seller profile not found. Please register as a seller first.");
     }
 
+    private static string StatusChangeMessage(OrderStatus status) => status switch
+    {
+        OrderStatus.Confirmed => "Your order has been confirmed by the seller.",
+        OrderStatus.OutForDelivery => "Your order is out for delivery.",
+        OrderStatus.Delivered => "Your order has been delivered. Enjoy!",
+        _ => $"Your order status is now {status}."
+    };
+
     private static void ValidateProductFields(string name, string volumeLabel, decimal price, int stockQty)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -321,9 +429,22 @@ public class SellerService : ISellerService
         seller.CreatedAt
     );
 
-    private static ProductDto MapProduct(Product p) => new(
-        p.Id, p.SellerId, p.Name, p.Category.ToString(), p.VolumeLabel, p.Price, p.StockQty, p.IsActive, p.ImageUrl
+    private ProductDto MapProduct(Product p, bool hasImage) => new(
+        p.Id, p.SellerId, p.Name, p.Category.ToString(), p.VolumeLabel, p.Price, p.StockQty, p.IsActive, BuildImageUrl(p, hasImage)
     );
+
+    // Computed fresh at read time from whether a ProductImage row exists,
+    // rather than stored, so changing App:PublicBaseUrl (e.g. a domain
+    // migration) doesn't leave old rows pointing at a dead host.
+    private string? BuildImageUrl(Product p, bool hasImage)
+    {
+        if (hasImage)
+        {
+            var baseUrl = _config["App:PublicBaseUrl"]?.TrimEnd('/') ?? "";
+            return $"{baseUrl}/api/products/{p.Id}/image";
+        }
+        return p.ImageUrl;
+    }
 
     private static SellerOrderDto MapOrder(Order o) => new(
         o.Id,

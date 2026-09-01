@@ -131,14 +131,49 @@ public class SellerController : ControllerBase
         }
     }
 
-    // ---- Orders ----
-
-    [HttpGet("orders")]
-    public async Task<ActionResult<List<SellerOrderDto>>> GetMyOrders([FromQuery] string? status)
+    [HttpPost("products/{id}/image")]
+    public async Task<ActionResult<ProductDto>> UploadProductImage(Guid id, IFormFile? file)
     {
         try
         {
-            return Ok(await _sellerService.GetMyOrdersAsync(CurrentUserId, status));
+            await using var stream = file?.OpenReadStream();
+            var product = await _sellerService.SetProductImageAsync(
+                CurrentUserId, id, stream, file?.ContentType, file?.Length ?? 0);
+            return Ok(product);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { message = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpDelete("products/{id}/image")]
+    public async Task<ActionResult<ProductDto>> DeleteProductImage(Guid id)
+    {
+        try
+        {
+            var product = await _sellerService.RemoveProductImageAsync(CurrentUserId, id);
+            return Ok(product);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { message = ex.Message });
+        }
+    }
+
+    // ---- Orders ----
+
+    [HttpGet("orders")]
+    public async Task<ActionResult<List<SellerOrderDto>>> GetMyOrders(
+        [FromQuery] string? status, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    {
+        try
+        {
+            return Ok(await _sellerService.GetMyOrdersAsync(CurrentUserId, status, page, pageSize));
         }
         catch (KeyNotFoundException ex)
         {
