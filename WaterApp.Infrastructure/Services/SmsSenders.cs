@@ -120,7 +120,7 @@ public class BrevoSmsSender : ISmsSender
             Sender: _senderName,
             Recipient: NormalizePhoneNumber(phoneNumber),
             Content: message,
-            Type: "Transactional", // not "Marketing" — this is a security code, not a promo
+            Type: "transactional", // lowercase required — Brevo rejects "Transactional" with 400 invalid_parameter
             Tag: "password-reset-otp"
         );
 
