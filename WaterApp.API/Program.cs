@@ -78,6 +78,21 @@ else
     builder.Services.AddScoped<ISmsSender, LoggingSmsSender>();
 }
 
+// Email sender for the forgot-password OTP flow — preferred over SMS when
+// the user has an email on file (see AuthService.ForgotPasswordAsync).
+// Reuses the SMS Brevo API key if a separate Email:BrevoApiKey isn't set,
+// since it's normally the same account. Requires Email:SenderEmail to be
+// a sender verified in Brevo; without it, falls back to a null sender that
+// makes ForgotPasswordAsync fall through to SMS instead of failing.
+if (!string.IsNullOrEmpty(builder.Configuration["Email:SenderEmail"]))
+{
+    builder.Services.AddHttpClient<IEmailSender, BrevoEmailSender>();
+}
+else
+{
+    builder.Services.AddScoped<IEmailSender, NullEmailSender>();
+}
+
 // ---- JWT Auth ----
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException("Jwt:Secret is not configured.");
