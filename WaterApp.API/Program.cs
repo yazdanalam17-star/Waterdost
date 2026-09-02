@@ -56,15 +56,20 @@ builder.Services.AddScoped<IAccountService, AccountService>();
 // its constructor) — no separate AddScoped needed.
 builder.Services.AddHttpClient<INotificationService, NotificationService>();
 
-// SMS sender for the forgot-password OTP flow. Only wired to a real
-// provider (Twilio) when it's actually configured; otherwise falls back to
-// logging the code, so local/dev environments never need real credentials
-// and a missing config doesn't 500 the forgot-password endpoint.
-var smsConfigured = !string.IsNullOrEmpty(builder.Configuration["Sms:AccountSid"])
-    && !string.IsNullOrEmpty(builder.Configuration["Sms:AuthToken"])
-    && !string.IsNullOrEmpty(builder.Configuration["Sms:FromNumber"]);
+// SMS sender for the forgot-password OTP flow. Selected via Sms:Provider
+// ("Brevo" or "Twilio"); falls back to logging the code when unset or
+// misconfigured, so local/dev environments never need real credentials and
+// a missing config doesn't 500 the forgot-password endpoint.
+var smsProvider = builder.Configuration["Sms:Provider"]?.Trim().ToLowerInvariant();
 
-if (smsConfigured)
+if (smsProvider == "brevo" && !string.IsNullOrEmpty(builder.Configuration["Sms:BrevoApiKey"]))
+{
+    builder.Services.AddHttpClient<ISmsSender, BrevoSmsSender>();
+}
+else if (smsProvider == "twilio"
+    && !string.IsNullOrEmpty(builder.Configuration["Sms:AccountSid"])
+    && !string.IsNullOrEmpty(builder.Configuration["Sms:AuthToken"])
+    && !string.IsNullOrEmpty(builder.Configuration["Sms:FromNumber"]))
 {
     builder.Services.AddHttpClient<ISmsSender, TwilioSmsSender>();
 }
@@ -111,7 +116,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowAll", policy =>
         policy
             .WithOrigins(
-                "https://waterdost.qmsofts.com",
+                "https://ghartak.qmsofts.com",
                 "http://localhost:8081", // Expo web dev server
                 "http://localhost:19006" // legacy Expo web dev port
             )
