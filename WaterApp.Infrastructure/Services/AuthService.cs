@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using WaterApp.Application.DTOs;
 using WaterApp.Application.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -17,22 +18,28 @@ public class AuthService : IAuthService
     private readonly IPasswordHasher _hasher;
     private readonly ITokenService _tokenService;
     private readonly ISmsSender _smsSender;
+    private readonly IEmailSender _emailSender;
     private readonly IMemoryCache _cache;
     private readonly IConfiguration _config;
+    private readonly ILogger<AuthService> _logger;
 
     public AuthService(
         AppDbContext db,
         IPasswordHasher hasher,
         ITokenService tokenService,
         ISmsSender smsSender,
+        IEmailSender emailSender,
         IMemoryCache cache,
-        IConfiguration config)
+        IConfiguration config,
+        ILogger<AuthService> logger)
     {
         _db = db;
         _hasher = hasher;
         _tokenService = tokenService;
         _smsSender = smsSender;
+        _emailSender = emailSender;
         _cache = cache;
+        _logger = logger;
         _config = config;
     }
 
@@ -134,10 +141,29 @@ public class AuthService : IAuthService
 
         await _db.SaveChangesAsync();
 
-        await _smsSender.SendAsync(
-            user.Phone,
-            $"Your Waterdost verification code is {code}. It expires in 10 minutes. Don't share this code with anyone."
-        );
+        var message = $"Your Ghartak verification code is {code}. It expires in 10 minutes. Don't share this code with anyone.";
+
+        // Email preferred when available: it isn't subject to India's
+        // carrier-level SMS/DLT filtering, which silently drops SMS from
+        // unregistered sender templates regardless of what the SMS
+        // gateway's own API reports (see ISmsSender — Brevo can return a
+        // clean 200 while the carrier discards the message). Falls back
+        // to SMS if the user has no email on file, or if the email send
+        // itself fails for any reason.
+        if (!string.IsNullOrWhiteSpace(user.Email))
+        {
+            try
+            {
+                await _emailSender.SendAsync(user.Email, user.Name, "Your Ghartak verification code", message);
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Email OTP delivery failed for user {UserId}, falling back to SMS.", user.Id);
+            }
+        }
+
+        await _smsSender.SendAsync(user.Phone, message);
     }
 
     public async Task<AuthResponse> ResetPasswordAsync(ResetPasswordRequest request)
