@@ -205,13 +205,23 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
-// Manual schema patch: columns added to entities after the schema was created
-// via EnsureCreated() (not migrations). Each uses ADD COLUMN IF NOT EXISTS so
-// it's safe to run on every startup and on databases that already have it.
-// Remove this block once proper EF Core migrations are set up.
+// Schema bootstrap for a fresh database, plus manual patches for columns/
+// tables added to entities after the original schema was created (this
+// project doesn't use EF Core migrations — see the note below).
+//
+// EnsureCreatedAsync() is what was missing here: it's a no-op on any
+// database that already has tables (which is every existing deployment),
+// but on a genuinely empty database — a brand-new Postgres instance, or one
+// that was reset — it creates the full current schema in one shot from the
+// EF Core model. The raw SQL block below then only has real work to do on
+// databases that predate one of these specific columns/tables; on a fresh
+// database it's a no-op too, since EnsureCreatedAsync() already included
+// them (every ALTER/CREATE below uses IF NOT EXISTS, so this is safe
+// either way — nothing here can run twice or conflict with itself).
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.EnsureCreatedAsync();
     await db.Database.ExecuteSqlRawAsync("""
         ALTER TABLE "Sellers" ADD COLUMN IF NOT EXISTS "UpiId" text;
         ALTER TABLE "Sellers" ADD COLUMN IF NOT EXISTS "Category" text NOT NULL DEFAULT 'Water';
@@ -252,7 +262,15 @@ using (var scope = app.Services.CreateScope())
         """);
 }
 
-// Applies pending EF Core migrations on startup (safe no-op if already up to date).
+// Applies pending EF Core migrations, if any exist. This project has zero
+// compiled migrations (schema is managed via EnsureCreatedAsync() + the raw
+// SQL patch block above instead — see the comment there), so today this is
+// a genuine no-op: it just ensures the __EFMigrationsHistory table exists
+// and finds nothing pending. It's not in conflict with EnsureCreatedAsync()
+// above — EF Core only disallows mixing the two when Migrate() actually has
+// migrations to apply against a database EnsureCreated() already set up
+// outside migration tracking. Kept here so this starts working for free the
+// day this project switches to real migrations.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
