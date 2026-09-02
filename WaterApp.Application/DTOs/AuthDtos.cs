@@ -6,7 +6,7 @@ namespace WaterApp.Application.DTOs;
 public record RegisterRequest(
     [Required, StringLength(100, MinimumLength = 1)] string Name,
     [Required, RegularExpression(@"^\+?[0-9]{7,15}$", ErrorMessage = "Enter a valid phone number.")] string Phone,
-    [EmailAddress] string? Email,
+    [Required, EmailAddress] string Email,
     [Required, MinLength(8, ErrorMessage = "Password must be at least 8 characters.")] string Password,
     UserRole Role
 );
