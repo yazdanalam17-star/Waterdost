@@ -29,12 +29,9 @@ public class TwilioSmsSender : ISmsSender
         _httpClient = httpClient;
         _logger = logger;
 
-        _accountSid = config["Sms:AccountSid"]
-            ?? throw new InvalidOperationException("Sms:AccountSid is not configured.");
-        var authToken = config["Sms:AuthToken"]
-            ?? throw new InvalidOperationException("Sms:AuthToken is not configured.");
-        _fromNumber = config["Sms:FromNumber"]
-            ?? throw new InvalidOperationException("Sms:FromNumber is not configured.");
+        _accountSid = RequireConfig(config, "Sms:AccountSid");
+        var authToken = RequireConfig(config, "Sms:AuthToken");
+        _fromNumber = RequireConfig(config, "Sms:FromNumber");
 
         var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_accountSid}:{authToken}"));
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
@@ -58,6 +55,17 @@ public class TwilioSmsSender : ISmsSender
             throw new InvalidOperationException("Couldn't send the verification code. Please try again in a moment.");
         }
     }
+
+    // appsettings.json ships empty-string defaults for these settings (so
+    // the keys exist and are documented even before anyone's configured
+    // them). IConfiguration resolves an unset env var to that empty string
+    // — NOT null — so a plain ?? throw silently accepts "" as "configured"
+    // instead of failing loudly. This treats blank the same as absent.
+    // internal (not private) so BrevoSmsSender below can reuse it too.
+    internal static string RequireConfig(IConfiguration config, string key) =>
+        !string.IsNullOrWhiteSpace(config[key])
+            ? config[key]!
+            : throw new InvalidOperationException($"{key} is not configured.");
 }
 
 // Local-development fallback used when no SMS provider is configured —
@@ -104,8 +112,7 @@ public class BrevoSmsSender : ISmsSender
         _httpClient = httpClient;
         _logger = logger;
 
-        var apiKey = config["Sms:BrevoApiKey"]
-            ?? throw new InvalidOperationException("Sms:BrevoApiKey is not configured.");
+        var apiKey = TwilioSmsSender.RequireConfig(config, "Sms:BrevoApiKey");
         _senderName = config["Sms:SenderName"] ?? "Ghartak";
 
         // Brevo authenticates via a plain "api-key" header — not Bearer,
