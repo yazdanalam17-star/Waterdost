@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -34,9 +35,9 @@ public class BrevoEmailSender : IEmailSender
         _httpClient = httpClient;
         _logger = logger;
 
-        var apiKey = config["Email:BrevoApiKey"] ?? config["Sms:BrevoApiKey"]
+        var apiKey = FirstNonEmpty(config["Email:BrevoApiKey"], config["Sms:BrevoApiKey"])
             ?? throw new InvalidOperationException("Email:BrevoApiKey (or Sms:BrevoApiKey) is not configured.");
-        _senderEmail = config["Email:SenderEmail"]
+        _senderEmail = FirstNonEmpty(config["Email:SenderEmail"])
             ?? throw new InvalidOperationException("Email:SenderEmail is not configured.");
         _senderName = config["Email:SenderName"] ?? "Ghartak";
 
@@ -65,6 +66,15 @@ public class BrevoEmailSender : IEmailSender
             throw new InvalidOperationException("Couldn't send the verification email.");
         }
     }
+
+    // appsettings.json ships empty-string defaults for these settings (e.g.
+    // "Email": { "BrevoApiKey": "" }) so the keys exist and are documented
+    // even before anyone's configured them. IConfiguration then resolves an
+    // unset env var to that empty string — NOT null — so a plain ?? chain
+    // silently accepts "" as "configured" and never falls through to the
+    // next option. This treats blank the same as absent.
+    private static string? FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
 
     private record BrevoEmailAddress(
         [property: JsonPropertyName("email")] string Email,
