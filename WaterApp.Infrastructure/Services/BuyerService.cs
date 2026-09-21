@@ -231,11 +231,21 @@ public class BuyerService : IBuyerService
         if (request.Quantity <= 0)
             throw new ArgumentException("Quantity must be greater than zero.");
 
-        var product = await _db.Products.FirstOrDefaultAsync(p => p.Id == request.ProductId)
+        var product = await _db.Products
+            .Include(p => p.Seller)
+            .FirstOrDefaultAsync(p => p.Id == request.ProductId)
             ?? throw new KeyNotFoundException("Product not found.");
 
-        if (!product.IsActive)
+        // A suspended/pending seller's products must not be addable either.
+        if (!product.IsActive || product.Seller is null || product.Seller.Status != SellerStatus.Approved)
             throw new ArgumentException("This product is currently unavailable.");
+
+        // Checked BEFORE the upsert below. Previously an out-of-stock product
+        // got a row inserted and then "capped" to StockQty (= 0), leaving a
+        // zero-quantity line in the cart that PlaceOrderAsync would happily
+        // turn into a Rs 0 order line.
+        if (product.StockQty <= 0)
+            throw new ArgumentException($"'{product.Name}' is out of stock.");
 
         var cart = await GetOrCreateCartAsync(userId);
 
@@ -261,7 +271,9 @@ public class BuyerService : IBuyerService
         if (updatedQuantity > product.StockQty)
         {
             // Roll the quantity back to the stock cap rather than leaving an
-            // over-limit row in the cart or silently succeeding.
+            // over-limit row in the cart or silently succeeding. StockQty is
+            // always > 0 here (guarded above), so this can never produce a
+            // zero-quantity row.
             await _db.Database.ExecuteSqlInterpolatedAsync($"""
                 UPDATE "CartItems"
                 SET "Quantity" = {product.StockQty}
@@ -329,10 +341,25 @@ public class BuyerService : IBuyerService
 
         var address = await GetOwnedAddressAsync(userId, request.AddressId);
 
+        // The seller must actually deliver to this address. The browse
+        // screens already filter by pincode, but PlaceOrder is a public API
+        // endpoint - without this check anyone could order from any seller
+        // regardless of where they are.
+        var buyerPincode = address.Pincode.Trim();
+        var servesPincode = await _db.ServiceAreas
+            .AnyAsync(sa => sa.SellerId == seller.Id && sa.Pincode == buyerPincode);
+        if (!servesPincode)
+            throw new InvalidOperationException(
+                $"This seller doesn't deliver to pincode {buyerPincode}. Choose a different address or seller.");
+
         var cart = await GetOrCreateCartAsync(userId);
-        var itemsForSeller = cart.Items
+        var allLinesForSeller = cart.Items
             .Where(i => i.Product is not null && i.Product.SellerId == request.SellerId)
             .ToList();
+
+        // Only lines with a positive quantity become order lines. Any legacy
+        // zero-quantity rows are still removed from the cart with the rest.
+        var itemsForSeller = allLinesForSeller.Where(i => i.Quantity > 0).ToList();
 
         if (itemsForSeller.Count == 0)
             throw new InvalidOperationException("Your cart has no items from this seller.");
@@ -408,7 +435,7 @@ public class BuyerService : IBuyerService
         };
 
         _db.Orders.Add(order);
-        _db.CartItems.RemoveRange(itemsForSeller);
+        _db.CartItems.RemoveRange(allLinesForSeller);
 
         await _db.SaveChangesAsync();
         await transaction.CommitAsync();
@@ -480,7 +507,6 @@ public class BuyerService : IBuyerService
     {
         var order = await _db.Orders
             .Include(o => o.Seller)
-            .Include(o => o.Items).ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(o => o.Id == orderId && o.BuyerId == userId)
             ?? throw new KeyNotFoundException("Order not found.");
 
@@ -490,25 +516,32 @@ public class BuyerService : IBuyerService
         if (order.Status == OrderStatus.OutForDelivery)
             throw new InvalidOperationException("This order is already out for delivery and cannot be cancelled online. Please contact the seller.");
 
-        order.Status = OrderStatus.Cancelled;
+        if (!OrderLifecycle.CanBuyerCancel(order.Status))
+            throw new InvalidOperationException($"An order that is {order.Status} cannot be cancelled.");
 
-        foreach (var item in order.Items)
-        {
-            if (item.Product is not null)
-                item.Product.StockQty += item.Quantity;
-        }
+        // Atomic: flips the status only if nobody else moved the order in the
+        // meantime, and restores stock with relative increments. The old
+        // version loaded Product rows, did StockQty += qty in memory and
+        // saved - which could overwrite a concurrent order's decrement, and
+        // could restore twice if two cancels raced.
+        var cancelled = await OrderLifecycle.TryCancelAsync(
+            _db, order.Id, order.Status, OrderCancelReason.BuyerCancelled);
 
-        if (order.PaymentStatus == PaymentStatus.Success)
-            order.PaymentStatus = PaymentStatus.Refunded;
+        if (!cancelled)
+            throw new InvalidOperationException("This order was just updated by the seller. Please refresh and try again.");
 
-        await _db.SaveChangesAsync();
+        await _db.Entry(order).ReloadAsync();
 
         if (order.Seller is not null)
         {
+            var refundHint = order.PaymentMode == PaymentMode.Online
+                ? " If you already received their UPI payment, please refund it."
+                : "";
+
             await _notifications.NotifyUserAsync(
                 order.Seller.UserId,
                 "Order cancelled",
-                $"An order for ₹{order.TotalAmount:F2} was cancelled by the buyer."
+                $"An order for ₹{order.TotalAmount:F2} was cancelled by the buyer.{refundHint}"
             );
         }
 
@@ -644,7 +677,7 @@ public class BuyerService : IBuyerService
     private static CartDto MapCart(Cart cart)
     {
         var items = cart.Items
-            .Where(i => i.Product is not null)
+            .Where(i => i.Product is not null && i.Quantity > 0)
             .Select(i => new CartItemDto(
                 i.ProductId,
                 i.Product!.Name,
