@@ -24,6 +24,7 @@ public interface ISellerService
     Task<List<SellerOrderDto>> GetMyOrdersAsync(Guid userId, string? status, int page = 1, int pageSize = 50);
     Task<SellerOrderDto> UpdateOrderStatusAsync(Guid userId, Guid orderId, string status);
     Task<SellerOrderDto> ConfirmPaymentAsync(Guid userId, Guid orderId);
+    Task<SellerOrderDto> RejectPaymentAsync(Guid userId, Guid orderId);
 
     Task<SellerDashboardStatsDto> GetDashboardStatsAsync(Guid userId);
 }
