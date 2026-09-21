@@ -29,7 +29,8 @@ public class AdminService : IAdminService
 
         var totalOrders = await _db.Orders.CountAsync();
         var totalRevenue = await _db.Orders
-            .Where(o => o.PaymentStatus == PaymentStatus.Success || o.PaymentStatus == PaymentStatus.CollectedInCash)
+            .Where(o => o.Status != OrderStatus.Cancelled &&
+                (o.PaymentStatus == PaymentStatus.Success || o.PaymentStatus == PaymentStatus.CollectedInCash))
             .SumAsync(o => (decimal?)o.TotalAmount) ?? 0;
 
         return new AdminStatsResponse(
