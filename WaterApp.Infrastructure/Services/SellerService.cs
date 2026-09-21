@@ -274,36 +274,39 @@ public class SellerService : ISellerService
         if (!Enum.TryParse<OrderStatus>(status, true, out var parsedStatus))
             throw new ArgumentException($"Unknown order status '{status}'.");
 
-        var order = await _db.Orders
-            .Include(o => o.Buyer)
-            .Include(o => o.Address)
-            .Include(o => o.Payment)
-            .Include(o => o.Items).ThenInclude(i => i.Product)
-            .FirstOrDefaultAsync(o => o.Id == orderId && o.SellerId == seller.Id)
-            ?? throw new KeyNotFoundException("Order not found.");
+        var order = await LoadOrderForSellerAsync(seller.Id, orderId);
+        var from = order.Status;
 
-        if (order.Status is OrderStatus.Delivered or OrderStatus.Cancelled)
-            throw new ArgumentException($"An order that is already {order.Status} cannot be changed.");
-        if (order.Status == OrderStatus.PendingPayment)
-            throw new ArgumentException("Confirm the payment before updating this order's status.");
-        if (parsedStatus == OrderStatus.Placed)
-            throw new ArgumentException("Cannot move an order back to Placed.");
+        if (from is OrderStatus.Delivered or OrderStatus.Cancelled)
+            throw new ArgumentException($"An order that is already {from} cannot be changed.");
+        if (from == OrderStatus.PendingPayment)
+            throw new ArgumentException("Confirm the payment (or mark it as not received) before updating this order's status.");
+        if (!OrderLifecycle.CanSellerMove(from, parsedStatus))
+            throw new ArgumentException($"An order that is {from} cannot be moved to {parsedStatus}.");
 
-        order.Status = parsedStatus;
-        if (parsedStatus == OrderStatus.Delivered)
-        {
-            order.DeliveredAt = DateTime.UtcNow;
-            if (order.PaymentMode == PaymentMode.CashOnDelivery && order.PaymentStatus == PaymentStatus.Pending)
-                order.PaymentStatus = PaymentStatus.CollectedInCash;
-        }
+        // Both paths are atomic "claims" (see OrderLifecycle): if the buyer
+        // cancelled - or anything else touched the order - between the load
+        // above and the write below, nothing is changed and the seller is
+        // asked to refresh instead of silently overwriting the new state.
+        bool applied = parsedStatus == OrderStatus.Cancelled
+            // Seller cancel now restores stock and settles payment, exactly
+            // like a buyer cancel. Previously it only flipped the status, so
+            // the cancelled quantity was lost from stock permanently.
+            ? await OrderLifecycle.TryCancelAsync(_db, order.Id, from, OrderCancelReason.SellerCancelled)
+            : await OrderLifecycle.TryAdvanceAsync(_db, order.Id, from, parsedStatus);
 
-        await _db.SaveChangesAsync();
+        if (!applied)
+            throw new InvalidOperationException("This order was just updated by someone else. Please refresh and try again.");
 
-        await _notifications.NotifyUserAsync(
-            order.BuyerId,
-            "Order update",
-            StatusChangeMessage(parsedStatus)
-        );
+        await _db.Entry(order).ReloadAsync();
+
+        var message = parsedStatus == OrderStatus.Cancelled && order.PaymentMode == PaymentMode.Online && order.PaymentStatus == PaymentStatus.Refunded
+            ? "The seller cancelled your order. Your payment will be refunded by the seller - contact them if it doesn't arrive."
+            : parsedStatus == OrderStatus.Cancelled
+                ? "The seller cancelled your order."
+                : StatusChangeMessage(parsedStatus);
+
+        await _notifications.NotifyUserAsync(order.BuyerId, "Order update", message);
 
         return MapOrder(order);
     }
@@ -311,33 +314,51 @@ public class SellerService : ISellerService
     public async Task<SellerOrderDto> ConfirmPaymentAsync(Guid userId, Guid orderId)
     {
         var seller = await GetOwnedSellerAsync(userId);
-
-        var order = await _db.Orders
-            .Include(o => o.Buyer)
-            .Include(o => o.Address)
-            .Include(o => o.Payment)
-            .Include(o => o.Items).ThenInclude(i => i.Product)
-            .FirstOrDefaultAsync(o => o.Id == orderId && o.SellerId == seller.Id)
-            ?? throw new KeyNotFoundException("Order not found.");
+        var order = await LoadOrderForSellerAsync(seller.Id, orderId);
 
         if (order.PaymentMode != PaymentMode.Online)
             throw new ArgumentException("Only online (UPI) payments need manual confirmation.");
+
+        // A cancelled/expired order must never be "paid" again - that used to
+        // be possible and made cancelled orders count as revenue. If real
+        // money did arrive, the seller has to refund it outside the app.
+        if (order.Status == OrderStatus.Cancelled)
+            throw new ArgumentException("This order was cancelled, so its payment can't be confirmed. If you did receive the money, please refund the buyer directly.");
+
         if (order.PaymentStatus == PaymentStatus.Success)
             throw new ArgumentException("This payment is already confirmed.");
 
-        order.PaymentStatus = PaymentStatus.Success;
-        if (order.Payment is not null)
+        var wasPendingPayment = order.Status == OrderStatus.PendingPayment;
+        var fromStatus = order.Status;
+        var newStatus = wasPendingPayment ? OrderStatus.Placed : fromStatus;
+        DateTime? paidAt = DateTime.UtcNow;
+
+        // Atomic claim on the order's current status, so this can't race with
+        // the buyer cancelling or the auto-expiry job cancelling it.
+        await using (var tx = await _db.Database.BeginTransactionAsync())
         {
-            order.Payment.Status = PaymentStatus.Success;
-            order.Payment.PaidAt = DateTime.UtcNow;
+            var claimed = await _db.Orders
+                .Where(o => o.Id == order.Id && o.Status == fromStatus && o.PaymentStatus != PaymentStatus.Success)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(o => o.PaymentStatus, PaymentStatus.Success)
+                    .SetProperty(o => o.Status, newStatus));
+
+            if (claimed == 0)
+            {
+                await tx.RollbackAsync();
+                throw new InvalidOperationException("This order was just updated by someone else. Please refresh and try again.");
+            }
+
+            await _db.Payments
+                .Where(p => p.OrderId == order.Id)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(p => p.Status, PaymentStatus.Success)
+                    .SetProperty(p => p.PaidAt, paidAt));
+
+            await tx.CommitAsync();
         }
 
-        // Confirming payment activates a pending online order into the queue.
-        var wasPendingPayment = order.Status == OrderStatus.PendingPayment;
-        if (wasPendingPayment)
-            order.Status = OrderStatus.Placed;
-
-        await _db.SaveChangesAsync();
+        await _db.Entry(order).ReloadAsync();
 
         await _notifications.NotifyUserAsync(
             order.BuyerId,
@@ -345,6 +366,37 @@ public class SellerService : ISellerService
             wasPendingPayment
                 ? $"Your payment of ₹{order.TotalAmount:F2} was confirmed and your order is now placed."
                 : $"Your payment of ₹{order.TotalAmount:F2} was confirmed."
+        );
+
+        return MapOrder(order);
+    }
+
+    // The seller checked their UPI/bank account and the money isn't there.
+    // Cancels the order, releases its stock and marks the payment failed.
+    // Before this existed a fake or mistyped UTR left the order stuck in
+    // PendingPayment - holding stock - with no way for the seller to clear it.
+    public async Task<SellerOrderDto> RejectPaymentAsync(Guid userId, Guid orderId)
+    {
+        var seller = await GetOwnedSellerAsync(userId);
+        var order = await LoadOrderForSellerAsync(seller.Id, orderId);
+
+        if (order.PaymentMode != PaymentMode.Online)
+            throw new ArgumentException("Only online (UPI) orders have a payment that can be rejected.");
+        if (order.Status != OrderStatus.PendingPayment)
+            throw new ArgumentException("Only orders that are still awaiting payment can be rejected. To stop a confirmed order, cancel it instead.");
+
+        var cancelled = await OrderLifecycle.TryCancelAsync(
+            _db, order.Id, OrderStatus.PendingPayment, OrderCancelReason.PaymentRejected);
+
+        if (!cancelled)
+            throw new InvalidOperationException("This order was just updated by someone else. Please refresh and try again.");
+
+        await _db.Entry(order).ReloadAsync();
+
+        await _notifications.NotifyUserAsync(
+            order.BuyerId,
+            "Payment not received",
+            $"The seller couldn't find your payment of ₹{order.TotalAmount:F2}, so the order was cancelled. If money was deducted from your account, share your UPI reference with the seller."
         );
 
         return MapOrder(order);
@@ -367,13 +419,16 @@ public class SellerService : ISellerService
             (o.Status == OrderStatus.Placed || o.Status == OrderStatus.Confirmed || o.Status == OrderStatus.OutForDelivery));
         var todayOrders = await _db.Orders.CountAsync(o => o.SellerId == seller.Id && o.CreatedAt >= todayUtc);
 
+        // Cancelled orders never count as revenue, whatever their payment
+        // status says (a paid-then-cancelled order is Refunded now, but this
+        // also protects any older rows that were left as Success).
         var totalRevenue = await _db.Orders
-            .Where(o => o.SellerId == seller.Id &&
+            .Where(o => o.SellerId == seller.Id && o.Status != OrderStatus.Cancelled &&
                 (o.PaymentStatus == PaymentStatus.Success || o.PaymentStatus == PaymentStatus.CollectedInCash))
             .SumAsync(o => (decimal?)o.TotalAmount) ?? 0;
 
         var todayRevenue = await _db.Orders
-            .Where(o => o.SellerId == seller.Id && o.CreatedAt >= todayUtc &&
+            .Where(o => o.SellerId == seller.Id && o.CreatedAt >= todayUtc && o.Status != OrderStatus.Cancelled &&
                 (o.PaymentStatus == PaymentStatus.Success || o.PaymentStatus == PaymentStatus.CollectedInCash))
             .SumAsync(o => (decimal?)o.TotalAmount) ?? 0;
 
@@ -390,6 +445,17 @@ public class SellerService : ISellerService
     }
 
     // ---- helpers ----
+
+    private async Task<Order> LoadOrderForSellerAsync(Guid sellerId, Guid orderId)
+    {
+        return await _db.Orders
+            .Include(o => o.Buyer)
+            .Include(o => o.Address)
+            .Include(o => o.Payment)
+            .Include(o => o.Items).ThenInclude(i => i.Product)
+            .FirstOrDefaultAsync(o => o.Id == orderId && o.SellerId == sellerId)
+            ?? throw new KeyNotFoundException("Order not found.");
+    }
 
     private async Task<Seller> GetOwnedSellerAsync(Guid userId)
     {
