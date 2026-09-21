@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using WaterApp.API.Services;
 using WaterApp.Application.Interfaces;
 using WaterApp.Infrastructure.Data;
 using WaterApp.Infrastructure.Services;
@@ -55,6 +56,10 @@ builder.Services.AddScoped<IAccountService, AccountService>();
 // INotificationService (as well as wiring up the HttpClient it takes in
 // its constructor) — no separate AddScoped needed.
 builder.Services.AddHttpClient<INotificationService, NotificationService>();
+
+// Cancels UPI orders that were never confirmed (releases their reserved
+// stock). Interval/timeout: Orders:PendingPaymentTimeoutMinutes.
+builder.Services.AddHostedService<PendingPaymentExpiryService>();
 
 // SMS sender for the forgot-password OTP flow. Selected via Sms:Provider
 // ("Brevo" or "Twilio"); falls back to logging the code when unset or
