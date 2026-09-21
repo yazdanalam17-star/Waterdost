@@ -201,6 +201,12 @@ public class SellerController : ControllerBase
         {
             return BadRequest(new { message = ex.Message });
         }
+        catch (InvalidOperationException ex)
+        {
+            // The order changed under the seller (e.g. buyer cancelled) - 409 so
+            // the app can tell them to refresh instead of showing a server error.
+            return Conflict(new { message = ex.Message });
+        }
     }
 
     [HttpPatch("orders/{id}/confirm-payment")]
@@ -218,6 +224,33 @@ public class SellerController : ControllerBase
         catch (ArgumentException ex)
         {
             return BadRequest(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { message = ex.Message });
+        }
+    }
+
+    // The UPI payment never arrived: cancels the order and releases its stock.
+    [HttpPatch("orders/{id}/reject-payment")]
+    public async Task<ActionResult<SellerOrderDto>> RejectPayment(Guid id)
+    {
+        try
+        {
+            var order = await _sellerService.RejectPaymentAsync(CurrentUserId, id);
+            return Ok(order);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { message = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { message = ex.Message });
         }
     }
 
